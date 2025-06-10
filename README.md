@@ -1,6 +1,6 @@
 # EntitySAM [CVPR'25]
 
-> [**EntitySAM: Segment Everything in Video**](https://openaccess.thecvf.com/content/CVPR2025/papers/Ye_EntitySAM_Segment_Everything_in_Video_CVPR_2025_paper.pdf2)                 
+> [**EntitySAM: Segment Everything in Video**](https://openaccess.thecvf.com/content/CVPR2025/papers/Ye_EntitySAM_Segment_Everything_in_Video_CVPR_2025_paper.pdf)                 
 > CVPR 2025  
 > Adobe Research, EPFL, CMU
 
