@@ -29,25 +29,13 @@ Automatically tracking and segmenting every video entity remains a significant c
 ## Zero-shot Video Entity Segmentation
 Our EntitySAM segment every entity in a video. Results are compared with SAM 2 and DEVA. EntitySAM achieves zero-shot video entity segmentation without requiring  video-level training data or category annotations.
 
-<video width="100%" controls>
-  <source src="./assets/example1.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+https://github.com/user-attachments/assets/ad9ef654-ca35-43c9-ac55-9778ac22a06f
 
-<video width="100%" controls>
-  <source src="./assets/example2.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+https://github.com/user-attachments/assets/f4cfca96-80b2-4387-8cad-a46c10a23440
 
-<video width="100%" controls>
-  <source src="./assets/example3.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+https://github.com/user-attachments/assets/761ddaa6-ad93-4c32-a44b-8984437a1584
 
-<video width="100%" controls>
-  <source src="./assets/example4.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+https://github.com/user-attachments/assets/a2d69f01-e686-446d-8dc5-50e75e4cb816
 
 # Training and Inference
 Code will be released soon in two weeks.
