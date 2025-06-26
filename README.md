@@ -10,7 +10,7 @@ We propose **EntitySAM**, a novel framework extending SAM2 to the task of **Vide
 
 Updates
 -----------------
-The code will be released soon in two weeks.
+2025/06/26: We release the evaluation code and checkpoints. See [Evaluation](#evaluation) section for checkpoints and [EVAL.md](EVAL.md) for evaluation instructions.
 
 2025/06/02: Our paper [EntitySAM](https://openaccess.thecvf.com/content/CVPR2025/papers/Ye_EntitySAM_Segment_Everything_in_Video_CVPR_2025_paper.pdf) is online.
 
