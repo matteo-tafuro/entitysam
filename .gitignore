@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+env/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# PyTorch
+*.pth
+*.pt
+
+# Data
+datasets/
+data/
+
+# Results
+outputs/
+checkpoints/
+
+# OS
+.DS_Store 

@@ -37,9 +37,63 @@ https://github.com/user-attachments/assets/761ddaa6-ad93-4c32-a44b-8984437a1584
 
 https://github.com/user-attachments/assets/a2d69f01-e686-446d-8dc5-50e75e4cb816
 
-# Training and Inference
-Code will be released soon in two weeks.
+# Installation
+EntitySAM environment is based on SAM 2. The code requires `python>=3.10`, as well as `torch>=2.5.1` and `torchvision>=0.20.1`. Please follow the instructions [here](https://pytorch.org/get-started/locally/) to install both PyTorch and TorchVision dependencies. You can install EntitySAM on a GPU machine using:
 
+```bash
+git clone https://github.com/ymq2017/entitysam && cd entitysam
+
+pip install -e .
+
+pip install git+https://github.com/cocodataset/panopticapi.git
+pip install git+https://github.com/facebookresearch/detectron2.git
+```
+
+# Datasets
+
+## Training Dataset
+For training EntitySAM, you can download the COCO dataset from the [official website](https://cocodataset.org/).
+
+## Evaluation Datasets
+For evaluation, you can download the VIPSeg dataset from the [official website](https://github.com/VIPSeg-Dataset/VIPSeg-Dataset) or use [our processed version](https://huggingface.co/mqye/entitysam/tree/main) for convenience.
+
+### Directory Structure
+```
+datasets/
+├── VIPSeg_720P/
+│   ├── images/
+│   ├── panomasks/
+│   ├── panomasksRGB/
+│   ├── panoVIPSeg_categories.json
+│   ├── panoptic_gt_VIPSeg_val.json
+│   ├── train.txt
+│   ├── val.txt
+│   └── test.txt
+└── COCO/
+    ├── train2017/
+    ├── val2017/
+    ├── annotations/
+    └── panoptic_train2017/
+```
+
+# Evaluation
+
+For detailed evaluation instructions, please see [EVAL.md](EVAL.md).
+
+## Pre-trained Checkpoints
+
+We provide pre-trained EntitySAM checkpoints on [Hugging Face](https://huggingface.co/mqye/entitysam/tree/main). You can download the checkpoints using the following table:
+
+| Model | Checkpoint Path | Download Link |
+|-------|----------------|---------------|
+| ViT-L | `./checkpoints/vit-l/model_0009999.pth` | [Download](https://huggingface.co/mqye/entitysam/blob/main/checkpoints/vit-l/model_0009999.pth) |
+| ViT-S | `./checkpoints/vit-s/model_0009999.pth` | [Download](https://huggingface.co/mqye/entitysam/blob/main/checkpoints/vit-s/model_0009999.pth) |
+<!-- 
+Alternatively, you can clone the entire repository:
+```bash
+git lfs install
+git clone https://huggingface.co/mqye/entitysam
+``` -->
 
 Citation
 ---------------
