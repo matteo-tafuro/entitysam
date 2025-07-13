@@ -10,7 +10,9 @@ We propose **EntitySAM**, a novel framework extending SAM2 to the task of **Vide
 
 Updates
 -----------------
-🔥 2025/06/26: We release the evaluation code and checkpoints. See [Evaluation](#evaluation) section.
+🔥 2025/07/12: We release the training code. See [Training](#train) section.
+
+2025/06/26: We release the evaluation code and checkpoints. See [Evaluation](#evaluation) section.
 
 2025/06/02: Our paper [EntitySAM](https://openaccess.thecvf.com/content/CVPR2025/papers/Ye_EntitySAM_Segment_Everything_in_Video_CVPR_2025_paper.pdf) is online.
 
@@ -69,7 +71,7 @@ datasets/
 │   ├── train.txt
 │   ├── val.txt
 │   └── test.txt
-└── COCO/
+└── coco/
     ├── train2017/
     ├── val2017/
     ├── annotations/
@@ -94,6 +96,10 @@ Alternatively, you can clone the entire repository:
 git lfs install
 git clone https://huggingface.co/mqye/entitysam
 ``` -->
+
+# Train
+
+For training instructions, please see [TRAIN.md](TRAIN.md).
 
 Citation
 ---------------

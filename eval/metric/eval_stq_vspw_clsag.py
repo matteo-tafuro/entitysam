@@ -21,7 +21,7 @@ def parse_args():
                         help='ground truth directory. Point this to <BASE_DIR>/VIPSeg/VIPSeg_720P/panomasksRGB '
                              'after running the conversion script')
 
-    parser.add_argument('--pan_gt_json_file', type=str, default="datasets/vipseg_dvis_ver/VIPSeg_720P/panoptic_gt_VIPSeg_val.json",
+    parser.add_argument('--pan_gt_json_file', type=str, default="datasets/VIPSeg_720P/panoptic_gt_VIPSeg_val.json",
                         help='ground truth JSON file. Point this to <BASE_DIR>/VIPSeg/VIPSeg_720P/panoptic_gt_'
                              'VIPSeg_val.json after running the conversion script')
 

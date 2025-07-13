@@ -1,0 +1,111 @@
+from detectron2.config import CfgNode as CN
+
+
+def add_train_config(cfg):
+    cfg.DATASETS.DATASET_RATIO = (1.0, )
+    cfg.DATASETS.DATALOADER_TYPE = 'iter'
+    cfg.DATASETS.TRAIN = ("coco_panoptic_video_ov", )
+    cfg.DATASETS.TEST = ()
+
+    # DataLoader
+    cfg.INPUT.FORMAT = "RGB"
+    cfg.INPUT.SAMPLING_FRAME_NUM = 8
+    cfg.INPUT.SAMPLING_FRAME_WINDOE_NUM = -1 
+    cfg.INPUT.SAMPLING_FRAME_VIDEO_NUM = -1
+    cfg.INPUT.SAMPLING_FRAME_RANGE = 40
+    cfg.INPUT.SAMPLING_FRAME_RANGE_MOT = 20
+    cfg.INPUT.SAMPLING_FRAME_RANGE_SOT = 20
+    cfg.INPUT.SAMPLING_INTERVAL = 1
+    cfg.INPUT.SAMPLING_FRAME_SHUFFLE = False
+    cfg.INPUT.AUGMENTATIONS = []  # "brightness", "contrast", "saturation", "rotation"
+    cfg.INPUT.REVERSE_AGU = False
+
+    cfg.INPUT.MIN_SIZE_TRAIN = (512, 544, 576, 608, 640, 672, 704, 736, 768, 800)
+    cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING = "choice_by_clip"
+    cfg.INPUT.RANDOM_FLIP = "flip_by_clip"
+    cfg.INPUT.MAX_SIZE_TRAIN = 1024
+    cfg.INPUT.MAX_SIZE_TEST = 800
+    cfg.INPUT.CROP = CN()
+    cfg.INPUT.CROP.ENABLED = True
+    cfg.INPUT.CROP.TYPE = "absolute_range"
+    cfg.INPUT.CROP.SIZE = (600, 1024)
+
+    cfg.DATALOADER.FILTER_EMPTY_ANNOTATIONS = False
+    cfg.DATALOADER.NUM_WORKERS = 2
+
+
+    # Pseudo Data Use
+    cfg.INPUT.PSEUDO = CN()
+    cfg.INPUT.PSEUDO.AUGMENTATIONS = ['rotation'] # ['rotation', 'brightness']
+    cfg.INPUT.PSEUDO.MIN_SIZE_TRAIN = (512, 544, 576, 608, 640, 672, 704, 736, 768, 800)
+    cfg.INPUT.PSEUDO.MAX_SIZE_TRAIN = 768
+    cfg.INPUT.PSEUDO.MIN_SIZE_TRAIN_SAMPLING = "choice_by_clip"
+    cfg.INPUT.PSEUDO.CROP = CN()
+    cfg.INPUT.PSEUDO.CROP.ENABLED = True
+    cfg.INPUT.PSEUDO.CROP.TYPE = "absolute_range"
+    cfg.INPUT.PSEUDO.CROP.SIZE = (480, 1024)
+
+    # LSJ
+    cfg.INPUT.LSJ_AUG = CN()
+    cfg.INPUT.LSJ_AUG.ENABLED = True
+    cfg.INPUT.LSJ_AUG.SQUARE_ENABLED = True
+    cfg.INPUT.LSJ_AUG.IMAGE_SIZE = 1024
+    cfg.INPUT.LSJ_AUG.MIN_SCALE = 0.25
+    cfg.INPUT.LSJ_AUG.MAX_SCALE = 4.0
+
+
+    # solver config
+    cfg.SOLVER.IMS_PER_BATCH = 8    
+    cfg.SOLVER.BASE_LR = 0.00005
+    cfg.SOLVER.STEPS = (7500,)
+    cfg.SOLVER.MAX_ITER = 10000     
+    cfg.SOLVER.WARMUP_FACTOR = 1.0
+    cfg.SOLVER.WARMUP_ITERS = 10
+    cfg.SOLVER.WEIGHT_DECAY_EMBED = 0.0
+    cfg.SOLVER.WEIGHT_DECAY = 0.05
+    cfg.SOLVER.LOG_PERIOD = 20
+    cfg.SOLVER.CHECKPOINT_PERIOD = 2000
+    # optimizer
+    cfg.SOLVER.OPTIMIZER = "ADAMW"
+    cfg.SOLVER.BACKBONE_MULTIPLIER = 0.1
+    cfg.SOLVER.CLIP_GRADIENTS = CN()
+    cfg.SOLVER.CLIP_GRADIENTS.ENABLED = True
+    cfg.SOLVER.CLIP_GRADIENTS.CLIP_TYPE = "full_model"
+    cfg.SOLVER.CLIP_GRADIENTS.CLIP_VALUE = 0.01
+    cfg.SOLVER.CLIP_GRADIENTS.NORM_TYPE = 2.0
+    # amp
+    cfg.SOLVER.AMP = CN()
+    cfg.SOLVER.AMP.ENABLED = True
+
+    # Model
+    cfg.MODEL.DINOV2 = CN()
+    cfg.MODEL.DINOV2.PRETRAINED = True
+    cfg.MODEL.DINOV2.USE_NORM = True
+    cfg.MODEL.DINOV2.MODEL_NAME = 'vitl'
+    cfg.MODEL.DINOV2.FREEZE = False
+    cfg.MODEL.DINOV2.OUT_CHANNEL = 256
+    
+    cfg.MODEL.MASK_DECODER_DEPTH = 8
+    cfg.MODEL.NAME = 'vitl'
+    
+    # loss
+    cfg.MODEL.MASK_FORMER = CN()
+    cfg.MODEL.MASK_FORMER.DEEP_SUPERVISION = True
+    cfg.MODEL.MASK_FORMER.NO_OBJECT_WEIGHT = 0.1
+    cfg.MODEL.MASK_FORMER.CLASS_WEIGHT = 5.0
+    cfg.MODEL.MASK_FORMER.DICE_WEIGHT = 5.0
+    cfg.MODEL.MASK_FORMER.MASK_WEIGHT = 5.0
+    cfg.MODEL.MASK_FORMER.REID_WEIGHT = 0.25
+    cfg.MODEL.MASK_FORMER.IOU_WEIGHT = 5.0
+    cfg.MODEL.MASK_FORMER.CLASS_WEIGHT_MATCHER = 5.0
+    cfg.MODEL.MASK_FORMER.DICE_WEIGHT_MATCHER = 5.0
+    cfg.MODEL.MASK_FORMER.MASK_WEIGHT_MATCHER = 5.0
+    cfg.MODEL.MASK_FORMER.REID_WEIGHT_MATCHER = 0.25
+    cfg.MODEL.MASK_FORMER.IOU_WEIGHT_MATCHER = 5.0
+
+    cfg.TEST.EVAL_PERIOD = 0
+    cfg.TEST.DETECTIONS_PER_IMAGE = 35
+
+    cfg.OUTPUT_DIR = 'output/exp_debug'
+
+

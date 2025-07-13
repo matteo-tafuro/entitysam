@@ -18,12 +18,13 @@ build/
 *.pt
 
 # Data
-datasets/
-data/
+datasets/VIPSeg_*
+datasets/coco
 
 # Results
 outputs/
 checkpoints/
+output/
 
 # OS
 .DS_Store 

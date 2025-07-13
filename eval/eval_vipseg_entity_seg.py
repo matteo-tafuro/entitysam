@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from sam2.build_sam import build_sam2_video_query_iou_predictor
 from panopticapi.utils import IdGenerator
+from panopticapi.utils import rgb2id
 
 
 
