@@ -20,11 +20,15 @@ build/
 # Data
 datasets/VIPSeg_*
 datasets/coco
+data/
 
 # Results
 outputs/
 checkpoints/
 output/
 
+# SAM build
+sam2/_C.so
+
 # OS
-.DS_Store 
+.DS_Store
