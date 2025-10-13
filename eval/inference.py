@@ -55,6 +55,12 @@ def generate_entity_visual_prompts(
         entity_info_list: list of dicts with file paths and metadata.
     """
 
+    # Some checks
+    assert len(frame_names) == panoptic_seg.shape[0], (
+        f"Number of frame names ({len(frame_names)}) does not match number of frames "
+        f"in panoptic_seg ({panoptic_seg.shape[0]})."
+    )
+
     os.makedirs(os.path.join(output_dir, "entity_prompts"), exist_ok=True)
     pan_np = panoptic_seg.cpu().numpy()  # [T,H,W]
     T, H, W = pan_np.shape
