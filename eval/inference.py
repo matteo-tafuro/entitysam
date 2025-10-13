@@ -17,24 +17,34 @@ from torch.nn import functional as F
 
 from sam2.build_sam import build_sam2_video_query_iou_predictor
 
+# VIPSeg uses 124 categories
+NUM_CATEGORIES = 124
 
-def inference_video_vps_save_results(
-    pred_ious,
-    pred_stability_scores,
-    pred_masks,
+
+def post_process_results_for_vps(
+    pred_ious,  # [T, N]
+    pred_masks,  # [N, T, H, W] (your current layout)
+    pred_stability_scores,  # None or [N]
     out_size,
     overlap_threshold=0.7,
     mask_binary_threshold=0.5,
     object_mask_threshold=0.05,
     test_topk_per_image=100,
+    num_categories=NUM_CATEGORIES,  # pass NUM_CATEGORIES or keep your const
 ):
     """
-    Post process of multi-mask into panoptic seg
+    Post process of multi-mask into panoptic segmentation. Also returns the best frame index and score for each entity.
     """
 
-    average_scores = pred_ious.mean(dim=0)  # from shape [T, N] to [N]
+    # --- (1) get per-entity best frame index from pred_ious ---
+    best_frame_idx = pred_ious.argmax(dim=0)  # [N]
+    best_frame_score = pred_ious.max(dim=0).values
+
+    # --- (2) keep the top-k scoring masks above a threshold ---
+    average_scores = pred_ious.mean(dim=0)  # [N]
+
     # random label as class-agnostic for visualization
-    labels = torch.randint(0, NUM_CATEGORIES, (len(average_scores),)).to(
+    labels = torch.randint(0, num_categories, (len(average_scores),)).to(
         pred_ious.device
     )
     pred_id = torch.arange(len(average_scores), device=pred_ious.device)
@@ -43,20 +53,25 @@ def inference_video_vps_save_results(
         object_mask_threshold,
         average_scores.topk(k=min(len(average_scores), test_topk_per_image))[0][-1],
     )
-    cur_scores = average_scores[keep]
-    cur_classes = labels[keep]
-    cur_masks = pred_masks[keep]
-    cur_ids = pred_id[keep]
 
-    if pred_stability_scores:
+    cur_scores = average_scores[keep]  # [N_kept]
+    cur_classes = labels[keep]  # [N_kept]
+    cur_masks = pred_masks[keep]  # [N_kept, T, H, W]
+    cur_ids = pred_id[keep]  # [N_kept]
+    cur_best_frame_idx = best_frame_idx[keep]  # [N_kept]
+    cur_best_frame_score = best_frame_score[keep]  # [N_kept]
+
+    # Use stability scores if provided
+    if pred_stability_scores is not None:
         mask_quality_scores = pred_stability_scores[keep]
     else:
         from train.utils.comm import calculate_mask_quality_scores
 
         mask_quality_scores = calculate_mask_quality_scores(cur_masks[:, ::5])
+
     del pred_masks
 
-    # initial panoptic_seg and segments infos
+    # --- (3) conversion to panoptic ---
     h, w = cur_masks.shape[-2:]
     panoptic_seg = torch.zeros(
         (cur_masks.size(1), out_size[0], out_size[1]),
@@ -65,58 +80,62 @@ def inference_video_vps_save_results(
     )
     segments_infos = []
     out_ids = []
+    out_best_frames = []
     current_segment_id = 0
 
     if cur_masks.shape[0] == 0:
-        # We didn't detect any mask
         return {
             "image_size": out_size,
             "pred_masks": panoptic_seg.cpu(),
             "segments_infos": segments_infos,
             "pred_ids": out_ids,
+            "pred_best_frames": out_best_frames,
             "task": "vps",
         }
     else:
         cur_scores = cur_scores + 0.5 * mask_quality_scores
 
-        cur_masks = F.interpolate(
-            cur_masks, size=out_size, mode="bilinear", align_corners=False
-        )
+        cur_masks = F.interpolate(cur_masks, size=out_size, mode="bilinear")
         cur_masks = cur_masks.sigmoid()
-
         is_bg = (cur_masks < mask_binary_threshold).sum(0) == len(cur_masks)
         cur_prob_masks = cur_scores.view(-1, 1, 1, 1).to(cur_masks.device) * cur_masks
-        cur_mask_ids = cur_prob_masks.argmax(0)  # (t, h, w)
+
+        cur_mask_ids = cur_prob_masks.argmax(0)  # (T, H, W)
         cur_mask_ids[is_bg] = -1
+        del cur_prob_masks, is_bg
 
-        del cur_prob_masks
-        del is_bg
-
-        for k in range(cur_classes.shape[0]):
-            cur_masks_k = cur_masks[k].squeeze(0)
+        for k in range(cur_classes.shape[0]):  # N_kept
+            cur_masks_k = cur_masks[k].squeeze(0)  # (T, H, W)
 
             pred_class = int(cur_classes[k]) + 1  # start from 1
-            # assume all are entities for class-agnostic
-            isthing = True
+            isthing = True  # class-agnostic entities
 
-            # filter out the unstable segmentation results
             mask_area = (cur_mask_ids == k).sum().item()
             original_area = (cur_masks_k >= mask_binary_threshold).sum().item()
             mask = (cur_mask_ids == k) & (cur_masks_k >= mask_binary_threshold)
+
             if mask_area > 0 and original_area > 0 and mask.sum().item() > 0:
                 if mask_area / original_area < overlap_threshold:
                     continue
+
                 current_segment_id += 1
                 panoptic_seg[mask] = current_segment_id
+
+                # Attach the peak frame info for this surviving entity
+                peak_t = int(cur_best_frame_idx[k])
+                peak_score = float(cur_best_frame_score[k])
 
                 segments_infos.append(
                     {
                         "id": current_segment_id,
                         "isthing": bool(isthing),
                         "category_id": pred_class,
+                        "best_conf_frame_idx": peak_t,
+                        "best_conf_score": peak_score,
                     }
                 )
-                out_ids.append(cur_ids[k])
+                out_ids.append(int(cur_ids[k]))
+                out_best_frames.append(peak_t)
 
         del cur_masks
 
@@ -125,6 +144,7 @@ def inference_video_vps_save_results(
             "pred_masks": panoptic_seg.cpu(),
             "segments_infos": segments_infos,
             "pred_ids": out_ids,
+            "pred_best_frames": out_best_frames,
             "task": "vps",
         }
 
@@ -202,9 +222,6 @@ def process(video_id, frame_names, outputs, categories_dict, output_dir, video_d
 
 
 if __name__ == "__main__":
-    # VIPSeg uses 124 categories
-    NUM_CATEGORIES = 124
-
     parser = argparse.ArgumentParser(
         description="Run the model with a specified checkpoint directory on a specified video."
     )
@@ -334,8 +351,11 @@ if __name__ == "__main__":
     pred_masks = pred_masks[:, ~torch.tensor(padding_mask, device=pred_masks.device)]
     pred_eious = pred_eious[~torch.tensor(padding_mask, device=pred_eious.device)]
 
-    result_i = inference_video_vps_save_results(
-        pred_eious, pred_stability_scores, pred_masks, out_size
+    result_i = post_process_results_for_vps(
+        pred_ious=pred_eious,
+        pred_masks=pred_masks,
+        out_size=out_size,
+        pred_stability_scores=pred_stability_scores,
     )
 
     anno = process(
