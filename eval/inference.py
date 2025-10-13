@@ -32,19 +32,20 @@ def inference_video_vps_save_results(
     Post process of multi-mask into panoptic seg
     """
 
-    scores = pred_ious
+    average_scores = pred_ious.mean(dim=0) # from shape [T, N] to [N]
     # random label as class-agnostic for visualization
-    labels = torch.randint(0, 123, (len(scores),)).to(pred_ious.device)
-    pred_id = torch.arange(len(scores), device=pred_ious.device)
+    labels = torch.randint(0, 123, (len(average_scores),)).to(pred_ious.device)
+    pred_id = torch.arange(len(average_scores), device=pred_ious.device)
 
-    keep = scores >= max(
+    keep = average_scores >= max(
         object_mask_threshold,
-        scores.topk(k=min(len(scores), test_topk_per_image))[0][-1],
+        average_scores.topk(k=min(len(average_scores), test_topk_per_image))[0][-1],
     )
-    cur_scores = scores[keep]
+    cur_scores = average_scores[keep]
     cur_classes = labels[keep]
     cur_masks = pred_masks[keep]
     cur_ids = pred_id[keep]
+
     if pred_stability_scores:
         mask_quality_scores = pred_stability_scores[keep]
     else:
@@ -76,22 +77,24 @@ def inference_video_vps_save_results(
     else:
         cur_scores = cur_scores + 0.5 * mask_quality_scores
 
-        cur_masks = F.interpolate(
-            cur_masks, size=out_size, mode="bilinear", align_corners=False
-        )
+        cur_masks = F.interpolate(cur_masks, size=out_size, mode="bilinear")
         cur_masks = cur_masks.sigmoid()
-
         is_bg = (cur_masks < mask_binary_threshold).sum(0) == len(cur_masks)
         cur_prob_masks = cur_scores.view(-1, 1, 1, 1).to(cur_masks.device) * cur_masks
+
         cur_mask_ids = cur_prob_masks.argmax(0)  # (t, h, w)
         cur_mask_ids[is_bg] = -1
-
         del cur_prob_masks
         del is_bg
 
         stuff_memory_list = {}
         for k in range(cur_classes.shape[0]):
-            cur_masks_k = cur_masks[k].squeeze(0)
+            cur_masks_k = F.interpolate(
+                cur_masks[k].unsqueeze(0),
+                size=out_size,
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
 
             pred_class = int(cur_classes[k]) + 1  # start from 1
             # assume all are entities for class-agnostic
@@ -222,6 +225,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_dir", type=str, required=True, help="Checkpoint directory name"
     )
+    # Config file is taken from config search path, which includes /sam2
     parser.add_argument(
         "--model_cfg",
         type=str,
@@ -247,15 +251,14 @@ if __name__ == "__main__":
         f"Checkpoint directory {args.ckpt_dir} does not exist."
     )
 
-    # Config file is taken from config search path, which includes /sam2
-    # assert os.path.exists(args.model_cfg), f"Model config file {args.model_cfg} does not exist."
-
     # Use video directory name as video_id
     video_dir = os.path.dirname(args.video_frames_dir)
     video_id = os.path.basename(os.path.normpath(video_dir))
 
     ckpt_dir = args.ckpt_dir
-    output_dir = args.output_dir
+    output_dir = os.path.join(
+        args.output_dir, f"{os.path.basename(os.path.normpath(ckpt_dir))}_{video_id}"
+    )
     os.makedirs(output_dir, exist_ok=True)
 
     # use bfloat16 for the entire notebook
@@ -304,6 +307,7 @@ if __name__ == "__main__":
         ]
     )
 
+    # Prepare the inference state with padding frames
     progress_order = [0, 0, 0] + list(range(0, len(frame_names)))
     padding_mask = [True] * 3 + [False] * len(frame_names)
 
@@ -327,14 +331,18 @@ if __name__ == "__main__":
         pred_eious.append(pred_eiou)
 
     pred_masks = torch.cat(pred_masks_list, dim=1)
-    pred_eious = torch.stack(pred_eious).mean(0)
+    pred_eious = torch.stack(pred_eious)
+
     pred_stability_scores = None
 
+    # Remove padding frames
     pred_masks = pred_masks[:, ~torch.tensor(padding_mask, device=pred_masks.device)]
+    pred_eious = pred_eious[~torch.tensor(padding_mask, device=pred_eious.device)]
 
     result_i = inference_video_vps_save_results(
         pred_eious, pred_stability_scores, pred_masks, out_size
     )
+
     anno = process(
         video_id, frame_names, result_i, categories_dict, output_dir, video_dir
     )
