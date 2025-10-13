@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import time
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import torch
@@ -22,18 +23,51 @@ NUM_CATEGORIES = 124
 
 
 def post_process_results_for_vps(
-    pred_ious,  # [T, N]
-    pred_masks,  # [N, T, H, W] (your current layout)
-    pred_stability_scores,  # None or [N]
-    out_size,
-    overlap_threshold=0.7,
-    mask_binary_threshold=0.5,
-    object_mask_threshold=0.05,
-    test_topk_per_image=100,
-    num_categories=NUM_CATEGORIES,  # pass NUM_CATEGORIES or keep your const
-):
+    pred_ious: torch.Tensor,  # shape [T, N]
+    pred_masks: torch.Tensor,  # shape [N, T, H, W]
+    pred_stability_scores: Optional[torch.Tensor],  # shape [N] or None
+    out_size: Tuple[int, int],  # (height, width)
+    overlap_threshold: float = 0.7,
+    mask_binary_threshold: float = 0.5,
+    object_mask_threshold: float = 0.05,
+    test_topk_per_image: int = 100,
+    num_categories: int = NUM_CATEGORIES,
+) -> Dict[str, object]:
     """
-    Post process of multi-mask into panoptic segmentation. Also returns the best frame index and score for each entity.
+    Convert per-frame, per-candidate mask predictions into panoptic video segments.
+
+    This function performs three main steps:
+      1. Selects a best frame per candidate from `pred_ious` (per-frame IoU matrix).
+      2. Aggregates per-candidate scores (mean over time), applies an absolute threshold
+         and a top-K cap, and optionally incorporates stability scores to re-weight candidates.
+      3. Runs pixel-wise competition (weighted by candidate scores) to produce a panoptic
+         segmentation map for each frame and filters segments using spatio-temporal overlap criteria.
+
+    Args:
+        pred_ious: Float tensor with shape [T, N]. T is the number of frames (after removing any
+            warmup/padding), N is the number of candidates.
+        pred_masks: Float tensor with shape [N, T, H, W] containing raw mask logits for each
+            candidate/time. These logits are sigmoid-ed and interpolated to `out_size` inside the function.
+        pred_stability_scores: Optional 1D tensor [N] with an independently estimated mask quality/stability.
+            If None, a fallback estimator is called on a temporal subsample.
+        out_size: Tuple (height, width) of the output panoptic maps.
+        overlap_threshold: Fraction in (0,1]. A candidate is discarded if the fraction of its original mask
+            area that remains assigned after competition is less than this threshold.
+        mask_binary_threshold: Threshold (0-1) applied to sigmoid(logits) to compute original mask
+            area and intersections.
+        object_mask_threshold: Absolute floor for average candidate score.
+        test_topk_per_image: Cap on number of candidates to retain by score.
+        num_categories: Number of categories used for randomized visualization labels (class-agnostic
+            behavior uses random assignment in this demo/training script).
+
+    Returns:
+        A dictionary with the following keys:
+          - "image_size": Tuple[int,int] (height, width)
+          - "pred_masks": Tensor [T, H, W], A 2D map per frame where each pixel value is an entity ID
+          - "segments_infos": list of dicts, one per surviving segment
+          - "pred_ids": list[int] of original candidate ids surviving
+          - "pred_best_frames": list[int] of best frame indices for each surviving candidate
+          - "task": str, fixed to "vps"
     """
 
     # --- (1) get per-entity best frame index from pred_ious ---
