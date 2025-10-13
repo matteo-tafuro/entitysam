@@ -210,15 +210,15 @@ def process(video_id, frame_names, outputs, categories_dict, output_dir, video_d
 
 if __name__ == "__main__":
     # VIPSeg uses 124 categories
-    NUM_CATEGORIES = 256
+    NUM_CATEGORIES = 124
 
     parser = argparse.ArgumentParser(
         description="Run the model with a specified checkpoint directory on a specified video."
     )
     parser.add_argument(
-        "--video_frames_dir", type=str, help="Directory containing video frames"
+        "--video_frames_dir", type=str, required=True, help="Directory containing video frames"
     )
-    parser.add_argument("--output_dir", type=str, help="Output directory")
+    parser.add_argument("--output_dir", type=str, required=True, help="Output directory")
     parser.add_argument(
         "--ckpt_dir", type=str, required=True, help="Checkpoint directory name"
     )
