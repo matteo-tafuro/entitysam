@@ -14,6 +14,7 @@ import torch
 from natsort import natsorted
 from panopticapi.utils import IdGenerator, rgb2id
 from PIL import Image, ImageDraw
+from scipy.ndimage import binary_dilation
 from torch.nn import functional as F
 
 from sam2.build_sam import build_sam2_video_query_iou_predictor
@@ -28,7 +29,8 @@ def generate_entity_visual_prompts(
     frame_dir: str,
     frame_names: list[str],
     output_dir: str,
-    bbox_thickness: int = 3,
+    crop_padding: int = 10,
+    bbox_thickness: int = 2,
 ):
     """
     Based on the original paper's supplementary material:
@@ -49,10 +51,8 @@ def generate_entity_visual_prompts(
         frame_dir: Directory containing the original video frames.
         frame_names: List of frame file names (str) in the video, in order.
         output_dir: Base output directory where "entity_prompts" subdir will be created.
+        crop_padding: Number of pixels to pad around the entity mask when cropping.
         bbox_thickness: Thickness of the bounding box to draw around the entity.
-
-    Returns:
-        entity_info_list: list of dicts with file paths and metadata.
     """
 
     # Some checks
@@ -63,9 +63,6 @@ def generate_entity_visual_prompts(
 
     os.makedirs(os.path.join(output_dir, "entity_prompts"), exist_ok=True)
     pan_np = panoptic_seg.cpu().numpy()  # [T,H,W]
-    T, H, W = pan_np.shape
-
-    entity_info_list = []
 
     for seg in segments_infos:
         seg_id = int(seg["id"])
@@ -76,9 +73,9 @@ def generate_entity_visual_prompts(
             continue
 
         # Extract boundaries
-        ys, xs = np.where(mask)
-        y1, y2 = int(ys.min()), int(ys.max())
-        x1, x2 = int(xs.min()), int(xs.max())
+        bb_ys, bb_xs = np.where(mask)
+        bb_y1, bb_y2 = int(bb_ys.min()), int(bb_ys.max())
+        bb_x1, bb_x2 = int(bb_xs.min()), int(bb_xs.max())
 
         # Load frame and draw bbox
         frame_path = os.path.join(frame_dir, frame_names[t])
@@ -86,30 +83,29 @@ def generate_entity_visual_prompts(
             im0 = im0.convert("RGB")
             draw = ImageDraw.Draw(im0)
             draw.rectangle(
-                [x1, y1, x2 + 1, y2 + 1], outline=(255, 0, 0), width=bbox_thickness
+                [bb_x1, bb_y1, bb_x2 + 1, bb_y2 + 1],
+                outline=(255, 0, 0),
+                width=bbox_thickness,
             )
 
-            # Mask background AFTER drawing bbox
+            # Slightly dilate the binary mask for masking
+            dilated_mask = binary_dilation(mask, iterations=10).astype(mask.dtype)
             arr = np.array(im0)
-            arr[~mask] = 0
+            arr[~dilated_mask] = 0
 
-            # Crop around bbox
-            im_cropped = Image.fromarray(arr).crop((x1, y1, x2 + 1, y2 + 1))
+            # For cropping, use the dilated bbox and add some padding (beware of im bounds)
+            mask_ys, mask_xs = np.where(dilated_mask)
+            mask_y1 = max(0, int(mask_ys.min()) - crop_padding)
+            mask_y2 = min(im0.height - 1, int(mask_ys.max()) + crop_padding)
+            mask_x1 = max(0, int(mask_xs.min()) - crop_padding)
+            mask_x2 = min(im0.width - 1, int(mask_xs.max()) + crop_padding)
+            im_cropped = Image.fromarray(arr).crop(
+                (mask_x1, mask_y1, mask_x2 + 1, mask_y2 + 1)
+            )
 
         save_name = f"entity_{seg_id:06d}_frame{t:05d}.jpg"
         save_path = os.path.join(output_dir, "entity_prompts", save_name)
         im_cropped.save(save_path, format="JPEG")
-
-        entity_info_list.append(
-            {
-                "segment_id": seg_id,
-                "frame_idx": t,
-                "bbox": [x1, y1, x2, y2],
-                "file": save_path,
-            }
-        )
-
-    return entity_info_list
 
 
 def post_process_results_for_vps(
