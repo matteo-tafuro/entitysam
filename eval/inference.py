@@ -32,9 +32,11 @@ def inference_video_vps_save_results(
     Post process of multi-mask into panoptic seg
     """
 
-    average_scores = pred_ious.mean(dim=0) # from shape [T, N] to [N]
+    average_scores = pred_ious.mean(dim=0)  # from shape [T, N] to [N]
     # random label as class-agnostic for visualization
-    labels = torch.randint(0, 123, (len(average_scores),)).to(pred_ious.device)
+    labels = torch.randint(0, NUM_CATEGORIES, (len(average_scores),)).to(
+        pred_ious.device
+    )
     pred_id = torch.arange(len(average_scores), device=pred_ious.device)
 
     keep = average_scores >= max(
@@ -87,7 +89,6 @@ def inference_video_vps_save_results(
         del cur_prob_masks
         del is_bg
 
-        stuff_memory_list = {}
         for k in range(cur_classes.shape[0]):
             cur_masks_k = F.interpolate(
                 cur_masks[k].unsqueeze(0),
@@ -107,14 +108,6 @@ def inference_video_vps_save_results(
             if mask_area > 0 and original_area > 0 and mask.sum().item() > 0:
                 if mask_area / original_area < overlap_threshold:
                     continue
-
-                # merge stuff regions
-                if not isthing:
-                    if pred_class in stuff_memory_list.keys():
-                        panoptic_seg[mask] = stuff_memory_list[pred_class]
-                        continue
-                    else:
-                        stuff_memory_list[pred_class] = current_segment_id + 1
                 current_segment_id += 1
                 panoptic_seg[mask] = current_segment_id
 
@@ -154,7 +147,6 @@ def process(video_id, frame_names, outputs, categories_dict, output_dir, video_d
     )
     for segments_info in segments_infos:
         id = segments_info["id"]
-        is_thing = segments_info["isthing"]
         sem = segments_info["category_id"]
 
         mask = pan_seg_result == id
@@ -219,9 +211,14 @@ if __name__ == "__main__":
         description="Run the model with a specified checkpoint directory on a specified video."
     )
     parser.add_argument(
-        "--video_frames_dir", type=str, required=True, help="Directory containing video frames"
+        "--video_frames_dir",
+        type=str,
+        required=True,
+        help="Directory containing video frames",
     )
-    parser.add_argument("--output_dir", type=str, required=True, help="Output directory")
+    parser.add_argument(
+        "--output_dir", type=str, required=True, help="Output directory"
+    )
     parser.add_argument(
         "--ckpt_dir", type=str, required=True, help="Checkpoint directory name"
     )
