@@ -76,24 +76,22 @@ def inference_video_vps_save_results(
     else:
         cur_scores = cur_scores + 0.5 * mask_quality_scores
 
-        cur_masks = F.interpolate(cur_masks, size=out_size, mode="bilinear")
+        cur_masks = F.interpolate(
+            cur_masks, size=out_size, mode="bilinear", align_corners=False
+        )
         cur_masks = cur_masks.sigmoid()
+
         is_bg = (cur_masks < mask_binary_threshold).sum(0) == len(cur_masks)
         cur_prob_masks = cur_scores.view(-1, 1, 1, 1).to(cur_masks.device) * cur_masks
-
         cur_mask_ids = cur_prob_masks.argmax(0)  # (t, h, w)
         cur_mask_ids[is_bg] = -1
+
         del cur_prob_masks
         del is_bg
 
         stuff_memory_list = {}
         for k in range(cur_classes.shape[0]):
-            cur_masks_k = F.interpolate(
-                cur_masks[k].unsqueeze(0),
-                size=out_size,
-                mode="bilinear",
-                align_corners=False,
-            ).squeeze(0)
+            cur_masks_k = cur_masks[k].squeeze(0)
 
             pred_class = int(cur_classes[k]) + 1  # start from 1
             # assume all are entities for class-agnostic
