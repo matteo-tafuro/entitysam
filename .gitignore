@@ -23,9 +23,8 @@ datasets/coco
 data/
 
 # Results
-outputs/
+output*/
 checkpoints/
-output/
 
 # SAM build
 sam2/_C.so
