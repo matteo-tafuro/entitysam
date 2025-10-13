@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from natsort import natsorted
 from panopticapi.utils import IdGenerator, rgb2id
-from PIL import Image
+from PIL import Image, ImageDraw
 from torch.nn import functional as F
 
 from sam2.build_sam import build_sam2_video_query_iou_predictor
@@ -22,11 +22,95 @@ from sam2.build_sam import build_sam2_video_query_iou_predictor
 NUM_CATEGORIES = 124
 
 
+def generate_entity_visual_prompts(
+    panoptic_seg: torch.IntTensor,  # [T,H,W]
+    segments_infos: list[dict],  # len N
+    frame_dir: str,
+    frame_names: list[str],
+    output_dir: str,
+    bbox_thickness: int = 3,
+):
+    """
+    Based on the original paper's supplementary material:
+    https://openaccess.thecvf.com/content/CVPR2025/supplemental/Ye_EntitySAM_Segment_Everything_CVPR_2025_supplemental.pdf
+
+    For each entity, generate and save a masked JPG of the frame where it had the highest confidence.
+    It does the following:
+      1. The red bounding box drawn around the entity.
+      2. The rest of the image masked to black (after drawing the bbox).
+      3. The final image cropped tightly around the entity mask.
+
+    Args:
+        panoptic_seg: torch.IntTensor with shape [T,H,W] containing the panoptic segmentation
+            map for each frame. Each pixel value is an entity ID.
+        segments_infos: list of dicts, one per entity segment. Each dict has the relevant keys:
+            - "id": int, the entity ID matching pixel values in panoptic_seg
+            - "best_conf_frame_idx": int, index of the frame where this entity had the highest confidence
+        frame_dir: Directory containing the original video frames.
+        frame_names: List of frame file names (str) in the video, in order.
+        output_dir: Base output directory where "entity_prompts" subdir will be created.
+        bbox_thickness: Thickness of the bounding box to draw around the entity.
+
+    Returns:
+        entity_info_list: list of dicts with file paths and metadata.
+    """
+
+    os.makedirs(os.path.join(output_dir, "entity_prompts"), exist_ok=True)
+    pan_np = panoptic_seg.cpu().numpy()  # [T,H,W]
+    T, H, W = pan_np.shape
+
+    entity_info_list = []
+
+    for seg in segments_infos:
+        seg_id = int(seg["id"])
+        t = int(seg["best_conf_frame_idx"])
+
+        mask = pan_np[t] == seg_id
+        if not mask.any():
+            continue
+
+        # Extract boundaries
+        ys, xs = np.where(mask)
+        y1, y2 = int(ys.min()), int(ys.max())
+        x1, x2 = int(xs.min()), int(xs.max())
+
+        # Load frame and draw bbox
+        frame_path = os.path.join(frame_dir, frame_names[t])
+        with Image.open(frame_path) as im0:
+            im0 = im0.convert("RGB")
+            draw = ImageDraw.Draw(im0)
+            draw.rectangle(
+                [x1, y1, x2 + 1, y2 + 1], outline=(255, 0, 0), width=bbox_thickness
+            )
+
+            # Mask background AFTER drawing bbox
+            arr = np.array(im0)
+            arr[~mask] = 0
+
+            # Crop around bbox
+            im_cropped = Image.fromarray(arr).crop((x1, y1, x2 + 1, y2 + 1))
+
+        save_name = f"entity_{seg_id:06d}_frame{t:05d}.jpg"
+        save_path = os.path.join(output_dir, "entity_prompts", save_name)
+        im_cropped.save(save_path, format="JPEG")
+
+        entity_info_list.append(
+            {
+                "segment_id": seg_id,
+                "frame_idx": t,
+                "bbox": [x1, y1, x2, y2],
+                "file": save_path,
+            }
+        )
+
+    return entity_info_list
+
+
 def post_process_results_for_vps(
-    pred_ious: torch.Tensor,  # shape [T, N]
-    pred_masks: torch.Tensor,  # shape [N, T, H, W]
-    pred_stability_scores: Optional[torch.Tensor],  # shape [N] or None
-    out_size: Tuple[int, int],  # (height, width)
+    pred_ious: torch.Tensor,  # [T, N]
+    pred_masks: torch.Tensor,  # [N, T, H, W]
+    pred_stability_scores: Optional[torch.Tensor],  # [N] or None
+    out_size: Tuple[int, int],  # (H, W)
     overlap_threshold: float = 0.7,
     mask_binary_threshold: float = 0.5,
     object_mask_threshold: float = 0.05,
@@ -390,6 +474,14 @@ if __name__ == "__main__":
         pred_masks=pred_masks,
         out_size=out_size,
         pred_stability_scores=pred_stability_scores,
+    )
+
+    entity_info = generate_entity_visual_prompts(
+        panoptic_seg=result_i["pred_masks"],
+        segments_infos=result_i["segments_infos"],
+        frame_dir=video_dir,
+        frame_names=frame_names,
+        output_dir=output_dir,
     )
 
     anno = process(
