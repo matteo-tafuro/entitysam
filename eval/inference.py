@@ -275,72 +275,98 @@ def render_and_export_panoptic_frames(
     """
     save panoptic segmentation result as an image
     """
+    H, W = outputs["image_size"]  # (H, W)
+    pan_seg_result = outputs["pred_masks"]  # [T,H,W]
+    segments_infos = outputs["segments_infos"]
+
+    T = pan_seg_result.shape[0]
+    # Sanity check
+    assert len(frame_names) == T, (
+        f"Number of frame names ({len(frame_names)}) does not match number "
+        f"of frames in pan_seg_result ({T})."
+    )
+
     color_generator = IdGenerator(categories_dict)
 
-    img_shape = outputs["image_size"]
-    pan_seg_result = outputs["pred_masks"]
-    segments_infos = outputs["segments_infos"]
-    segments_infos_ = []
+    # Pre-initialize result array [T,H,W,3]
+    panoptic_rgb = np.zeros((T, H, W, 3), dtype=np.uint8)
 
-    pan_format = np.zeros(
-        (pan_seg_result.shape[0], img_shape[0], img_shape[1], 3), dtype=np.uint8
-    )
-    for segments_info in segments_infos:
-        id = segments_info["id"]
-        sem = segments_info["category_id"]
+    # ---- Build per-frame annotations for VIPSeg/COCO format ----
 
-        mask = pan_seg_result == id
-        color = color_generator.get_color(sem)
-        pan_format[mask] = color
+    # List of length N (num segments) where each item is a list of length T (num frames).
+    # Each inner list contains either None (if the segment is not present in that frame)
+    # or a dict with keys: category_id, iscrowd, id, bbox, area
+    per_segment_per_frame_ann = []
+    for seg_info in segments_infos:
+        entity_id = seg_info["id"]
+        category_id = seg_info["category_id"]
 
-        dts = []
-        dt_ = {"category_id": int(sem) - 1, "iscrowd": 0, "id": int(rgb2id(color))}
-        for i in range(pan_format.shape[0]):
-            area = mask[i].sum()
-            index = np.where(mask[i].numpy())
-            if len(index[0]) == 0:
-                dts.append(None)
-            else:
-                if area == 0:
-                    dts.append(None)
-                else:
-                    x = index[1].min()
-                    y = index[0].min()
-                    width = index[1].max() - x
-                    height = index[0].max() - y
-                    dt = {
-                        "bbox": [x.item(), y.item(), width.item(), height.item()],
-                        "area": int(area),
-                    }
-                    dt.update(dt_)
-                    dts.append(dt)
-        segments_infos_.append(dts)
+        entity_mask = (
+            (pan_seg_result == entity_id).cpu().numpy()
+        )  # Binary mask over time for this entity ID, still [T,H,W]
 
-    #### save image
-    annotations = []
-    for i, image_name in enumerate(frame_names):
-        image_ = Image.fromarray(pan_format[i])
-        if not os.path.exists(os.path.join(output_dir, "pan_pred", video_id)):
-            os.makedirs(os.path.join(output_dir, "pan_pred", video_id))
-        image_.save(
-            os.path.join(
-                output_dir,
-                "pan_pred",
-                video_id,
-                image_name.split("/")[-1].split(".")[0] + ".png",
-            )
-        )
-        annotations.append(
+        color = color_generator.get_color(category_id)
+        panoptic_rgb[entity_mask] = color
+
+        # VIPSeg/COCO format template
+        base_ann = {
+            "category_id": int(category_id) - 1,  # 0-indexed
+            "iscrowd": 0,
+            "id": int(rgb2id(color)),
+        }
+        # Build per-frame annotation list: bbox + area, or None if not on frame
+        per_frame_ann = []
+        for t in range(T):
+            x_true, y_true = np.where(entity_mask[t])  # arrays where mask is True
+            area = int(entity_mask[t].sum())
+            if area == 0:
+                per_frame_ann.append(None)
+                continue
+
+            # Compute tight bbox (x, y, w, h) for the mask on this frame
+            ys, xs = np.where(entity_mask[t])
+            x0, y0 = int(xs.min()), int(ys.min())
+            w = int(xs.max() - x0)
+            h = int(ys.max() - y0)
+
+            ann = {
+                "bbox": [x0, y0, w, h],
+                "area": area,
+            }
+            ann.update(base_ann)
+            per_frame_ann.append(ann)
+
+        per_segment_per_frame_ann.append(per_frame_ann)
+
+    # ---- Save results ----
+    export_dir = os.path.join(output_dir, "pan_pred", video_id)
+    os.makedirs(export_dir, exist_ok=True)
+
+    per_frame_outputs = []
+    for t, image_name in enumerate(frame_names):
+        # Save the panoptic RGB image
+        img = Image.fromarray(panoptic_rgb[t])
+        png_name = image_name.split("/")[-1].split(".")[0] + ".png"
+        img.save(os.path.join(export_dir, png_name))
+
+        # Collect this frame's annotations by taking the t-th element for each segment
+        frame_segments = [
+            seg_ann[t]
+            for seg_ann in per_segment_per_frame_ann
+            if seg_ann[t] is not None
+        ]
+        per_frame_outputs.append(
             {
-                "segments_info": [
-                    item[i] for item in segments_infos_ if item[i] is not None
-                ],
+                # If None, the segment is not present in this frame
+                "segments_info": frame_segments,
                 "file_name": image_name.split("/")[-1],
             }
         )
 
     del outputs
-    return {"annotations": annotations, "video_id": video_id}
+
+    # ---- Return summary for the whole video ----
+    return {"annotations": per_frame_outputs, "video_id": video_id}
 
 
 if __name__ == "__main__":
