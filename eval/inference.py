@@ -349,7 +349,6 @@ def render_and_export_panoptic_frames(
         # Build per-frame annotation list: bbox + area, or None if not on frame
         per_frame_ann = []
         for t in range(T):
-            x_true, y_true = np.where(entity_mask[t])  # arrays where mask is True
             area = int(entity_mask[t].sum())
             if area == 0:
                 per_frame_ann.append(None)
@@ -547,7 +546,7 @@ if __name__ == "__main__":
     )
 
     anno = render_and_export_panoptic_frames(
-        video_id, frame_names, result_i, categories_dict, output_dir, video_dir
+        video_id, frame_names, result_i, categories_dict, output_dir
     )
     predictions.append(anno)
 
