@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -23,15 +23,48 @@ from sam2.build_sam import build_sam2_video_query_iou_predictor
 NUM_CATEGORIES = 124
 
 
+def save_generated_images(
+    images: Iterable[Tuple[str, Image.Image]],
+    output_dir: str,
+    subdir: Optional[str] = None,
+) -> None:
+    """
+    Save a collection of PIL images to disk.
+
+    Args:
+        images: Iterable of (filename, PIL Image) tuples WITH the desired file extension.
+        output_dir: Base output directory.
+        subdir: Optional subdirectory inside output_dir to save images.
+    """
+    out_dir = output_dir if subdir is None else os.path.join(output_dir, subdir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    for filename, img in images:
+        # Use suffix to choose format (e.g., .jpg -> JPEG, .png -> PNG)
+        extension = os.path.splitext(filename)[-1].lower()
+        fname = os.path.basename(filename)
+        fmt = (
+            "PNG"
+            if extension == ".png"
+            else "JPEG"
+            if extension in {".jpg", ".jpeg"}
+            else None
+        )
+        if fmt is None:
+            raise ValueError(
+                f"Unsupported image extension for '{fname}'. Use .png/.jpg/.jpeg."
+            )
+        img.save(os.path.join(out_dir, fname), format=fmt)
+
+
 def generate_entity_visual_prompts(
     panoptic_seg: torch.IntTensor,  # [T,H,W]
     segments_infos: list[dict],  # len N
     frame_dir: str,
     frame_names: list[str],
-    output_dir: str,
     crop_padding: int = 10,
     bbox_thickness: int = 2,
-):
+) -> List[Tuple[str, Image.Image]]:
     """
     Based on the original paper's supplementary material:
     https://openaccess.thecvf.com/content/CVPR2025/supplemental/Ye_EntitySAM_Segment_Everything_CVPR_2025_supplemental.pdf
@@ -50,9 +83,11 @@ def generate_entity_visual_prompts(
             - "best_conf_frame_idx": int, index of the frame where this entity had the highest confidence
         frame_dir: Directory containing the original video frames.
         frame_names: List of frame file names (str) in the video, in order.
-        output_dir: Base output directory where "entity_prompts" subdir will be created.
         crop_padding: Number of pixels to pad around the entity mask when cropping.
         bbox_thickness: Thickness of the bounding box to draw around the entity.
+
+    Returns:
+        A list of (filename, PIL Image) tuples, one per entity
     """
 
     # Some checks
@@ -61,9 +96,10 @@ def generate_entity_visual_prompts(
         f"in panoptic_seg ({panoptic_seg.shape[0]})."
     )
 
-    os.makedirs(os.path.join(output_dir, "entity_prompts"), exist_ok=True)
     pan_np = panoptic_seg.cpu().numpy()  # [T,H,W]
 
+    # Output dictionary that will contain (filename, PIL Image) tuples
+    outputs = []
     for seg in segments_infos:
         seg_id = int(seg["id"])
         t = int(seg["best_conf_frame_idx"])
@@ -103,9 +139,10 @@ def generate_entity_visual_prompts(
                 (mask_x1, mask_y1, mask_x2 + 1, mask_y2 + 1)
             )
 
-        save_name = f"entity_{seg_id:06d}_frame{t:05d}.jpg"
-        save_path = os.path.join(output_dir, "entity_prompts", save_name)
-        im_cropped.save(save_path, format="JPEG")
+        save_name = f"entity_{seg_id:04d}_frame{t:05d}.png"
+        outputs.append((save_name, im_cropped))
+
+    return outputs
 
 
 def post_process_results_for_vps(
@@ -192,7 +229,6 @@ def post_process_results_for_vps(
     del pred_masks
 
     # --- (3) conversion to panoptic ---
-    h, w = cur_masks.shape[-2:]
     panoptic_seg = torch.zeros(
         (cur_masks.size(1), out_size[0], out_size[1]),
         dtype=torch.int32,
@@ -269,13 +305,12 @@ def post_process_results_for_vps(
         }
 
 
-def render_and_export_panoptic_frames(
+def build_panoptic_frames_and_annotations(
     video_id: str,
     frame_names: List[str],
     panoptic_outputs: Dict[str, Any],
     categories_by_id: Dict[int, Dict[str, Any]],
-    output_dir: str,
-) -> Dict[str, Any]:
+) -> Tuple[List[Tuple[str, Image.Image]], Dict[str, Any]]:
     """
     Generates a colorized PNG for each frame (one PNG per input frame) using the panoptic
     segmentation map and a deterministic color generator keyed by `categories_by_id`.
@@ -293,19 +328,11 @@ def render_and_export_panoptic_frames(
             - "id": int, category ID
             - "isthing": int, 1 if thing, 0 if stuff
             - "color": List[int,int,int], RGB color for visualization
-        output_dir: Base output directory where "pan_pred" subdir will be created.
 
     Returns:
-        A dictionary with keys:
-            - "annotations": list of dicts, one per frame, each with keys:
-                - "file_name": str, the frame file name
-                - "segments_info": list of dicts, one per entity/segment in that frame. Keys:
-                    - "category_id": int, 0-indexed category ID
-                    - "iscrowd": int, 0 or 1
-                    - "id": int, unique segment ID (from rgb2id color)
-                    - "bbox": List[int,int,int,int], [x,y,w,h] bounding box
-                    - "area": int, pixel area of the segment in that frame
-            - "video_id": str, the input video_id
+        A tuple (images, annotations) where:
+            images: List of (png_filename, PIL Image) tuples for each frame.
+            annotations: Dict with keys {"annotations": List[per-frame dict], "video_id": str}.
     """
     H, W = panoptic_outputs["image_size"]  # (H, W)
     pan_seg_result = panoptic_outputs["pred_masks"]  # [T,H,W]
@@ -369,16 +396,12 @@ def render_and_export_panoptic_frames(
 
         per_segment_per_frame_ann.append(per_frame_ann)
 
-    # ---- Save results ----
-    export_dir = os.path.join(output_dir, "pan_pred", video_id)
-    os.makedirs(export_dir, exist_ok=True)
-
+    image_outputs = []
     per_frame_outputs = []
     for t, image_name in enumerate(frame_names):
-        # Save the panoptic RGB image
-        img = Image.fromarray(panoptic_rgb[t])
-        png_name = image_name.split("/")[-1].split(".")[0] + ".png"
-        img.save(os.path.join(export_dir, png_name))
+        pil_img = Image.fromarray(panoptic_rgb[t])
+        save_name = image_name.split("/")[-1].split(".")[0] + ".png"
+        image_outputs.append((save_name, pil_img))
 
         # Collect this frame's annotations by taking the t-th element for each segment
         frame_segments = [
@@ -390,14 +413,14 @@ def render_and_export_panoptic_frames(
             {
                 # If None, the segment is not present in this frame
                 "segments_info": frame_segments,
-                "file_name": image_name.split("/")[-1],
+                "file_name": os.path.basename(image_name),
             }
         )
 
     del panoptic_outputs
 
-    # ---- Return summary for the whole video ----
-    return {"annotations": per_frame_outputs, "video_id": video_id}
+    annotations = {"annotations": per_frame_outputs, "video_id": video_id}
+    return image_outputs, annotations
 
 
 if __name__ == "__main__":
@@ -426,6 +449,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mask_decoder_depth", type=int, default=8, help="Mask decoder depth"
     )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--save_images",
+        dest="save_images",
+        action="store_true",
+        help="Save generated images.",
+    )
+    group.add_argument(
+        "--no_save_images",
+        dest="save_images",
+        action="store_false",
+        help="Do not save generated images.",
+    )
+    parser.set_defaults(save_images=True)
     args = parser.parse_args()
 
     # Log args
@@ -450,6 +487,7 @@ if __name__ == "__main__":
     output_dir = os.path.join(
         args.output_dir, f"{os.path.basename(os.path.normpath(ckpt_dir))}_{video_id}"
     )
+
     os.makedirs(output_dir, exist_ok=True)
 
     # use bfloat16 for the entire notebook
@@ -537,20 +575,19 @@ if __name__ == "__main__":
         pred_stability_scores=pred_stability_scores,
     )
 
-    entity_info = generate_entity_visual_prompts(
+    visual_prompt_images = generate_entity_visual_prompts(
         panoptic_seg=result_i["pred_masks"],
         segments_infos=result_i["segments_infos"],
         frame_dir=video_dir,
         frame_names=frame_names,
-        output_dir=output_dir,
     )
 
-    anno = render_and_export_panoptic_frames(
-        video_id, frame_names, result_i, categories_dict, output_dir
+    panoptic_images, anno = build_panoptic_frames_and_annotations(
+        video_id, frame_names, result_i, categories_dict
     )
     predictions.append(anno)
 
-    # After processing each video
+    # After processing the video
     end_time = time.time()
     processing_time = end_time - start_time
 
@@ -561,11 +598,25 @@ if __name__ == "__main__":
     peak_memory = max(peak_memory, current_peak_memory)
     final_gpu_mem = torch.cuda.memory_allocated() / 1024**3
 
-    print(f"\nVideo {video_id} Performance Metrics:")
+    print(f"\nVideo: {video_id}")
+    print("Performance Metrics:")
     print(f"Processing time: {processing_time:.2f} seconds")
     print(f"Running Peak GPU Memory: {peak_memory:.2f} GB")
     print(f"Current final GPU Memory: {final_gpu_mem:.2f} GB")
 
-    file_path = os.path.join(output_dir, "pred.json")
+    # Save images if needed
+    if args.save_images:
+        save_generated_images(
+            visual_prompt_images, output_dir=output_dir, subdir="entity_prompts"
+        )
+        save_generated_images(
+            panoptic_images, output_dir=output_dir, subdir="panoptic_images"
+        )
+        print(f"Saved images to {output_dir}")
+    else:
+        print("Skipping image saves. Set --save_images to enable.")
+
+    # Save JSON annotations
+    file_path = os.path.join(output_dir, "panoptic_preds.json")
     with open(file_path, "w") as f:
         json.dump({"annotations": predictions}, f)
