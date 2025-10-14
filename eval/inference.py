@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 import time
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -270,14 +270,46 @@ def post_process_results_for_vps(
 
 
 def render_and_export_panoptic_frames(
-    video_id, frame_names, outputs, categories_dict, output_dir, video_dir
-):
+    video_id: str,
+    frame_names: List[str],
+    panoptic_outputs: Dict[str, Any],
+    categories_by_id: Dict[int, Dict[str, Any]],
+    output_dir: str,
+) -> Dict[str, Any]:
     """
-    save panoptic segmentation result as an image
+    Generates a colorized PNG for each frame (one PNG per input frame) using the panoptic
+    segmentation map and a deterministic color generator keyed by `categories_by_id`.
+    For each frame, it also builds a COCO-style list of segment annotations with
+    bbox and area, aligned with VIPSeg conventions.
+
+    Args:
+        video_id: String identifier for the video.
+        frame_names: List of input frame file names (str) in the video, in order.
+        panoptic_outputs: Dict with keys:
+            - "image_size": Tuple[int,int] (height, width)
+            - "pred_masks": A 2D map per frame where each pixel value is an entity ID
+            - "segments_infos": list of dicts, one per entity from `post_process_results_for_vps`.
+        categories_by_id: Dict mapping category_id (int) to dict with keys:
+            - "id": int, category ID
+            - "isthing": int, 1 if thing, 0 if stuff
+            - "color": List[int,int,int], RGB color for visualization
+        output_dir: Base output directory where "pan_pred" subdir will be created.
+
+    Returns:
+        A dictionary with keys:
+            - "annotations": list of dicts, one per frame, each with keys:
+                - "file_name": str, the frame file name
+                - "segments_info": list of dicts, one per entity/segment in that frame. Keys:
+                    - "category_id": int, 0-indexed category ID
+                    - "iscrowd": int, 0 or 1
+                    - "id": int, unique segment ID (from rgb2id color)
+                    - "bbox": List[int,int,int,int], [x,y,w,h] bounding box
+                    - "area": int, pixel area of the segment in that frame
+            - "video_id": str, the input video_id
     """
-    H, W = outputs["image_size"]  # (H, W)
-    pan_seg_result = outputs["pred_masks"]  # [T,H,W]
-    segments_infos = outputs["segments_infos"]
+    H, W = panoptic_outputs["image_size"]  # (H, W)
+    pan_seg_result = panoptic_outputs["pred_masks"]  # [T,H,W]
+    segments_infos = panoptic_outputs["segments_infos"]
 
     T = pan_seg_result.shape[0]
     # Sanity check
@@ -286,7 +318,7 @@ def render_and_export_panoptic_frames(
         f"of frames in pan_seg_result ({T})."
     )
 
-    color_generator = IdGenerator(categories_dict)
+    color_generator = IdGenerator(categories_by_id)
 
     # Pre-initialize result array [T,H,W,3]
     panoptic_rgb = np.zeros((T, H, W, 3), dtype=np.uint8)
@@ -363,7 +395,7 @@ def render_and_export_panoptic_frames(
             }
         )
 
-    del outputs
+    del panoptic_outputs
 
     # ---- Return summary for the whole video ----
     return {"annotations": per_frame_outputs, "video_id": video_id}
