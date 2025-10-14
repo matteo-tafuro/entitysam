@@ -269,7 +269,7 @@ def post_process_results_for_vps(
         }
 
 
-def process(video_id, frame_names, outputs, categories_dict, output_dir, video_dir):
+def render_and_export_panoptic_frames(video_id, frame_names, outputs, categories_dict, output_dir, video_dir):
     """
     save panoptic segmentation result as an image
     """
@@ -486,7 +486,7 @@ if __name__ == "__main__":
         output_dir=output_dir,
     )
 
-    anno = process(
+    anno = render_and_export_panoptic_frames(
         video_id, frame_names, result_i, categories_dict, output_dir, video_dir
     )
     predictions.append(anno)
