@@ -269,7 +269,9 @@ def post_process_results_for_vps(
         }
 
 
-def render_and_export_panoptic_frames(video_id, frame_names, outputs, categories_dict, output_dir, video_dir):
+def render_and_export_panoptic_frames(
+    video_id, frame_names, outputs, categories_dict, output_dir, video_dir
+):
     """
     save panoptic segmentation result as an image
     """
