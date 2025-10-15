@@ -64,7 +64,7 @@ def generate_entity_visual_prompts(
     frame_names: list[str],
     crop_padding: int = 10,
     bbox_thickness: int = 2,
-) -> List[Tuple[str, Image.Image]]:
+) -> Tuple[List[Tuple[str, Image.Image]], Dict[int, int]]:
     """
     Based on the original paper's supplementary material:
     https://openaccess.thecvf.com/content/CVPR2025/supplemental/Ye_EntitySAM_Segment_Everything_CVPR_2025_supplemental.pdf
@@ -87,6 +87,7 @@ def generate_entity_visual_prompts(
         bbox_thickness: Thickness of the bounding box to draw around the entity.
 
     Returns:
+        A list of (entity_id, selected_frame) tuples, one per entity
         A list of (filename, PIL Image) tuples, one per entity
     """
 
@@ -98,8 +99,8 @@ def generate_entity_visual_prompts(
 
     pan_np = panoptic_seg.cpu().numpy()  # [T,H,W]
 
-    # Output dictionary that will contain (filename, PIL Image) tuples
-    outputs = []
+    entity_frame_assignments = {}  # entity_id: selected_frame_idx
+    imgs_with_filenames = []  # (filename, PIL Image) tuples
     for seg in segments_infos:
         seg_id = int(seg["id"])
         t = int(seg["best_conf_frame_idx"])
@@ -140,9 +141,11 @@ def generate_entity_visual_prompts(
             )
 
         save_name = f"entity_{seg_id:04d}_frame{t:05d}.png"
-        outputs.append((save_name, im_cropped))
 
-    return outputs
+        entity_frame_assignments[seg_id] = t
+        imgs_with_filenames.append((save_name, im_cropped))
+
+    return imgs_with_filenames, entity_frame_assignments
 
 
 def post_process_results_for_vps(
@@ -658,7 +661,7 @@ if __name__ == "__main__":
     )
 
     # Generate entity visual prompt images
-    visual_prompt_images = generate_entity_visual_prompts(
+    visual_prompt_images, entity_frame_assignments = generate_entity_visual_prompts(
         panoptic_seg=result_i["pred_masks"],
         segments_infos=result_i["segments_infos"],
         frame_dir=video_dir,
@@ -695,7 +698,13 @@ if __name__ == "__main__":
         print("Skipping image saves. Set --save_images to enable.")
 
     # Save JSON with summary
-    summary = {"annotations": predictions}
+    summary = {
+        "entity_crops": {
+            "frame_with_most_entities_idx": frame_with_most_entities_idx,
+            "entity_to_frame_assignments": entity_frame_assignments,
+        },
+        "annotations": predictions,
+    }
     file_path = os.path.join(output_dir, "panoptic_preds.json")
     with open(file_path, "w") as f:
-        json.dump(summary, f)
+        json.dump(summary, f, indent=2)
