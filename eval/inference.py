@@ -313,7 +313,7 @@ def select_frame_with_most_entities(
     pred_ious: torch.Tensor,  # [T, N] over all original candidates
 ):
     """
-    Find the frame with the most visible entities. If there are multiple such frames,
+    Find the 0-indexed frame with the most visible entities. If there are multiple such frames,
     select the one with the highest average IoU over the surviving candidates.
 
     Args:
