@@ -305,6 +305,79 @@ def post_process_results_for_vps(
         }
 
 
+def select_frame_with_most_entities(
+    panoptic_outputs: Dict[str, Any],
+    pred_ious: torch.Tensor,  # [T, N] over all original candidates
+):
+    """
+    Find the frame with the most visible entities. If there are multiple such frames,
+    select the one with the highest average IoU over the surviving candidates.
+
+    Args:
+        panoptic_outputs: output of `post_process_results_for_vps`, with keys, among others:
+            - "pred_masks": int tensor [T,H,W], 0=bg, >0=entity IDs after filtering
+            - "pred_ids": List[int] original candidate indices that survived filtering
+        pred_ious: Float tensor [T,N] with per-frame IoU scores for all original candidates.
+
+    Returns:
+        best_frame_idx: int, index of the selected frame (0 <= best_frame_idx < T)
+        highest_avg_score: float,
+    """
+    pan_seg = panoptic_outputs["pred_masks"].to(torch.int64)  # [T,H,W]
+    device = pred_ious.device
+
+    if pred_ious.shape[0] != pan_seg.shape[0]:
+        raise ValueError(
+            "Temporal size mismatch between panoptic outputs and pred_ious."
+        )
+
+    # Count unique nonzero IDs per frame (exclude background)
+    per_frame_counts = torch.tensor(
+        [
+            torch.unique(pan_seg[t][pan_seg[t] > 0]).numel()
+            for t in range(pan_seg.shape[0])
+        ]
+    ).to(device)
+
+    # Identify frames with the max count
+    max_count = int(per_frame_counts.max().item())
+    candidate_frames_idx = (
+        torch.nonzero(per_frame_counts == max_count, as_tuple=False)
+        .flatten()
+        .to(device)
+    )  # This gives a list of length M, where M is the number of frames with max count
+
+    # pred_ious is [T,N] over all original candidates. We need to select only the
+    # columns corresponding to the surviving candidates [M, N_kept]
+    keep = torch.as_tensor(
+        panoptic_outputs.get("pred_ids"), dtype=torch.long, device=device
+    )
+    scores = pred_ious.index_select(0, candidate_frames_idx).index_select(
+        1, keep
+    )  # [M, N_kept]
+
+    # Per-frame average score over the kept candidates
+    avg_per_frame_scores = scores.mean(dim=1)  # [M]
+    # Which of the M candidate frames has the highest average score?
+    candidate_idx = int(avg_per_frame_scores.argmax().item())  # scalar in [0, M-1]
+    # Now map it back to the original frame index
+    best_frame_idx = int(
+        candidate_frames_idx[candidate_idx].item()
+    )  # scalar in [0, T-1]
+    highest_avg_score = float(avg_per_frame_scores[candidate_idx].item())
+
+    print(
+        f"Multiple ({len(candidate_frames_idx)}) frames with max entity count {max_count}."
+    )
+    print(f"Selected frame {best_frame_idx + 1} with highest mean IoU:")
+    for i, f_idx in enumerate(candidate_frames_idx):
+        print(
+            f" - Frame {int(f_idx) + 1}: mean IoU {float(avg_per_frame_scores[i]):.4f}"
+        )
+
+    return best_frame_idx, highest_avg_score
+
+
 def build_panoptic_frames_and_annotations(
     video_id: str,
     frame_names: List[str],
@@ -517,8 +590,6 @@ if __name__ == "__main__":
         }
         categories_dict[cat_id] = tmp_cat
 
-    predictions = []
-
     total_frames = 0
     total_time = 0
     peak_memory = 0
@@ -575,6 +646,12 @@ if __name__ == "__main__":
         pred_stability_scores=pred_stability_scores,
     )
 
+    # Identify the frame where the most entities are visible (for later VLM call)
+    frame_with_most_entities_idx, avg_confidence_score = (
+        select_frame_with_most_entities(result_i, pred_eious)
+    )
+
+    # Generate entity visual prompt images
     visual_prompt_images = generate_entity_visual_prompts(
         panoptic_seg=result_i["pred_masks"],
         segments_infos=result_i["segments_infos"],
@@ -582,10 +659,10 @@ if __name__ == "__main__":
         frame_names=frame_names,
     )
 
-    panoptic_images, anno = build_panoptic_frames_and_annotations(
+    # Build and save panoptic images and annotations
+    panoptic_images, predictions = build_panoptic_frames_and_annotations(
         video_id, frame_names, result_i, categories_dict
     )
-    predictions.append(anno)
 
     # After processing the video
     end_time = time.time()
@@ -616,7 +693,8 @@ if __name__ == "__main__":
     else:
         print("Skipping image saves. Set --save_images to enable.")
 
-    # Save JSON annotations
+    # Save JSON with summary
+    summary = {"annotations": predictions}
     file_path = os.path.join(output_dir, "panoptic_preds.json")
     with open(file_path, "w") as f:
-        json.dump({"annotations": predictions}, f)
+        json.dump(summary, f)
