@@ -369,14 +369,21 @@ def select_frame_with_most_entities(
     )  # scalar in [0, T-1]
     highest_avg_score = float(avg_per_frame_scores[candidate_idx].item())
 
-    print(
-        f"Multiple ({len(candidate_frames_idx)}) frames with max entity count {max_count}."
-    )
-    print(f"Selected frame {best_frame_idx + 1} with highest mean IoU:")
-    for i, f_idx in enumerate(candidate_frames_idx):
+    if candidate_frames_idx.numel() == 1:
         print(
-            f" - Frame {int(f_idx) + 1}: mean IoU {float(avg_per_frame_scores[i]):.4f}"
+            f"Selected the only frame (idx {best_frame_idx}, 0-indexed) with entity count {max_count} and mean IoU {highest_avg_score:.4f}."
         )
+    else:
+        print(
+            f"Multiple frames ({len(candidate_frames_idx)}) with max entity count {max_count}."
+        )
+        print(
+            f"Selected frame with idx {best_frame_idx} (0-indexed) with highest mean IoU:"
+        )
+        for i, f_idx in enumerate(candidate_frames_idx):
+            print(
+                f" - Frame {int(f_idx)}: mean IoU {float(avg_per_frame_scores[i]):.4f}"
+            )
 
     return best_frame_idx, highest_avg_score
 
