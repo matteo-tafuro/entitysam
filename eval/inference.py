@@ -639,11 +639,17 @@ if __name__ == "__main__":
     pred_masks = pred_masks[:, ~torch.tensor(padding_mask, device=pred_masks.device)]
     pred_eious = pred_eious[~torch.tensor(padding_mask, device=pred_eious.device)]
 
+    # Post-process the results into panoptic maps
     result_i = post_process_results_for_vps(
         pred_ious=pred_eious,
         pred_masks=pred_masks,
         out_size=out_size,
         pred_stability_scores=pred_stability_scores,
+    )
+
+    # Build and save panoptic images and annotations
+    panoptic_images, predictions = build_panoptic_frames_and_annotations(
+        video_id, frame_names, result_i, categories_dict
     )
 
     # Identify the frame where the most entities are visible (for later VLM call)
@@ -657,11 +663,6 @@ if __name__ == "__main__":
         segments_infos=result_i["segments_infos"],
         frame_dir=video_dir,
         frame_names=frame_names,
-    )
-
-    # Build and save panoptic images and annotations
-    panoptic_images, predictions = build_panoptic_frames_and_annotations(
-        video_id, frame_names, result_i, categories_dict
     )
 
     # After processing the video
