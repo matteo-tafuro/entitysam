@@ -57,97 +57,6 @@ def save_generated_images(
         img.save(os.path.join(out_dir, fname), format=fmt)
 
 
-def generate_entity_visual_prompts(
-    panoptic_seg: torch.IntTensor,  # [T,H,W]
-    segments_infos: list[dict],  # len N
-    frame_dir: str,
-    frame_names: list[str],
-    crop_padding: int = 10,
-    bbox_thickness: int = 2,
-) -> Tuple[List[Tuple[str, Image.Image]], Dict[int, int]]:
-    """
-    Based on the original paper's supplementary material:
-    https://openaccess.thecvf.com/content/CVPR2025/supplemental/Ye_EntitySAM_Segment_Everything_CVPR_2025_supplemental.pdf
-
-    For each entity, generate and save a masked JPG of the frame where it had the highest confidence.
-    It does the following:
-      1. The red bounding box drawn around the entity.
-      2. The rest of the image masked to black (after drawing the bbox).
-      3. The final image cropped tightly around the entity mask.
-
-    Args:
-        panoptic_seg: torch.IntTensor with shape [T,H,W] containing the panoptic segmentation
-            map for each frame. Each pixel value is an entity ID.
-        segments_infos: list of dicts, one per entity segment. Each dict has the relevant keys:
-            - "id": int, the entity ID matching pixel values in panoptic_seg
-            - "best_conf_frame_idx": int, index of the frame where this entity had the highest confidence
-        frame_dir: Directory containing the original video frames.
-        frame_names: List of frame file names (str) in the video, in order.
-        crop_padding: Number of pixels to pad around the entity mask when cropping.
-        bbox_thickness: Thickness of the bounding box to draw around the entity.
-
-    Returns:
-        A list of (entity_id, selected_frame) tuples, one per entity
-        A list of (filename, PIL Image) tuples, one per entity
-    """
-
-    # Some checks
-    assert len(frame_names) == panoptic_seg.shape[0], (
-        f"Number of frame names ({len(frame_names)}) does not match number of frames "
-        f"in panoptic_seg ({panoptic_seg.shape[0]})."
-    )
-
-    pan_np = panoptic_seg.cpu().numpy()  # [T,H,W]
-
-    entity_frame_assignments = {}  # entity_id: selected_frame_idx
-    imgs_with_filenames = []  # (filename, PIL Image) tuples
-    for seg in segments_infos:
-        seg_id = int(seg["id"])
-        t = int(seg["best_conf_frame_idx"])
-
-        mask = pan_np[t] == seg_id
-        if not mask.any():
-            continue
-
-        # Extract boundaries
-        bb_ys, bb_xs = np.where(mask)
-        bb_y1, bb_y2 = int(bb_ys.min()), int(bb_ys.max())
-        bb_x1, bb_x2 = int(bb_xs.min()), int(bb_xs.max())
-
-        # Load frame and draw bbox
-        frame_path = os.path.join(frame_dir, frame_names[t])
-        with Image.open(frame_path) as im0:
-            im0 = im0.convert("RGB")
-            draw = ImageDraw.Draw(im0)
-            draw.rectangle(
-                [bb_x1, bb_y1, bb_x2 + 1, bb_y2 + 1],
-                outline=(255, 0, 0),
-                width=bbox_thickness,
-            )
-
-            # Slightly dilate the binary mask for masking
-            dilated_mask = binary_dilation(mask, iterations=10).astype(mask.dtype)
-            arr = np.array(im0)
-            arr[~dilated_mask] = 0
-
-            # For cropping, use the dilated bbox and add some padding (beware of im bounds)
-            mask_ys, mask_xs = np.where(dilated_mask)
-            mask_y1 = max(0, int(mask_ys.min()) - crop_padding)
-            mask_y2 = min(im0.height - 1, int(mask_ys.max()) + crop_padding)
-            mask_x1 = max(0, int(mask_xs.min()) - crop_padding)
-            mask_x2 = min(im0.width - 1, int(mask_xs.max()) + crop_padding)
-            im_cropped = Image.fromarray(arr).crop(
-                (mask_x1, mask_y1, mask_x2 + 1, mask_y2 + 1)
-            )
-
-        save_name = f"entity_{seg_id:04d}_frame{t:05d}.png"
-
-        entity_frame_assignments[seg_id] = t
-        imgs_with_filenames.append((save_name, im_cropped))
-
-    return imgs_with_filenames, entity_frame_assignments
-
-
 def post_process_results_for_vps(
     pred_ious: torch.Tensor,  # [T, N]
     pred_masks: torch.Tensor,  # [N, T, H, W]
@@ -306,6 +215,97 @@ def post_process_results_for_vps(
             "pred_best_frames": out_best_frames,
             "task": "vps",
         }
+
+
+def generate_entity_visual_prompts(
+    panoptic_seg: torch.IntTensor,  # [T,H,W]
+    segments_infos: list[dict],  # len N
+    frame_dir: str,
+    frame_names: list[str],
+    crop_padding: int = 10,
+    bbox_thickness: int = 2,
+) -> Tuple[List[Tuple[str, Image.Image]], Dict[int, int]]:
+    """
+    Based on the original paper's supplementary material:
+    https://openaccess.thecvf.com/content/CVPR2025/supplemental/Ye_EntitySAM_Segment_Everything_CVPR_2025_supplemental.pdf
+
+    For each entity, generate and save a masked JPG of the frame where it had the highest confidence.
+    It does the following:
+      1. The red bounding box drawn around the entity.
+      2. The rest of the image masked to black (after drawing the bbox).
+      3. The final image cropped tightly around the entity mask.
+
+    Args:
+        panoptic_seg: torch.IntTensor with shape [T,H,W] containing the panoptic segmentation
+            map for each frame. Each pixel value is an entity ID.
+        segments_infos: list of dicts, one per entity segment. Each dict has the relevant keys:
+            - "id": int, the entity ID matching pixel values in panoptic_seg
+            - "best_conf_frame_idx": int, index of the frame where this entity had the highest confidence
+        frame_dir: Directory containing the original video frames.
+        frame_names: List of frame file names (str) in the video, in order.
+        crop_padding: Number of pixels to pad around the entity mask when cropping.
+        bbox_thickness: Thickness of the bounding box to draw around the entity.
+
+    Returns:
+        A list of (entity_id, selected_frame) tuples, one per entity
+        A list of (filename, PIL Image) tuples, one per entity
+    """
+
+    # Some checks
+    assert len(frame_names) == panoptic_seg.shape[0], (
+        f"Number of frame names ({len(frame_names)}) does not match number of frames "
+        f"in panoptic_seg ({panoptic_seg.shape[0]})."
+    )
+
+    pan_np = panoptic_seg.cpu().numpy()  # [T,H,W]
+
+    entity_frame_assignments = {}  # entity_id: selected_frame_idx
+    imgs_with_filenames = []  # (filename, PIL Image) tuples
+    for seg in segments_infos:
+        seg_id = int(seg["id"])
+        t = int(seg["best_conf_frame_idx"])
+
+        mask = pan_np[t] == seg_id
+        if not mask.any():
+            continue
+
+        # Extract boundaries
+        bb_ys, bb_xs = np.where(mask)
+        bb_y1, bb_y2 = int(bb_ys.min()), int(bb_ys.max())
+        bb_x1, bb_x2 = int(bb_xs.min()), int(bb_xs.max())
+
+        # Load frame and draw bbox
+        frame_path = os.path.join(frame_dir, frame_names[t])
+        with Image.open(frame_path) as im0:
+            im0 = im0.convert("RGB")
+            draw = ImageDraw.Draw(im0)
+            draw.rectangle(
+                [bb_x1, bb_y1, bb_x2 + 1, bb_y2 + 1],
+                outline=(255, 0, 0),
+                width=bbox_thickness,
+            )
+
+            # Slightly dilate the binary mask for masking
+            dilated_mask = binary_dilation(mask, iterations=10).astype(mask.dtype)
+            arr = np.array(im0)
+            arr[~dilated_mask] = 0
+
+            # For cropping, use the dilated bbox and add some padding (beware of im bounds)
+            mask_ys, mask_xs = np.where(dilated_mask)
+            mask_y1 = max(0, int(mask_ys.min()) - crop_padding)
+            mask_y2 = min(im0.height - 1, int(mask_ys.max()) + crop_padding)
+            mask_x1 = max(0, int(mask_xs.min()) - crop_padding)
+            mask_x2 = min(im0.width - 1, int(mask_xs.max()) + crop_padding)
+            im_cropped = Image.fromarray(arr).crop(
+                (mask_x1, mask_y1, mask_x2 + 1, mask_y2 + 1)
+            )
+
+        save_name = f"entity_{seg_id:04d}_frame{t:05d}.png"
+
+        entity_frame_assignments[seg_id] = t
+        imgs_with_filenames.append((save_name, im_cropped))
+
+    return imgs_with_filenames, entity_frame_assignments
 
 
 def select_frame_with_most_entities(
@@ -650,16 +650,6 @@ if __name__ == "__main__":
         pred_stability_scores=pred_stability_scores,
     )
 
-    # Build and save panoptic images and annotations
-    panoptic_images, predictions = build_panoptic_frames_and_annotations(
-        video_id, frame_names, result_i, categories_dict
-    )
-
-    # Identify the frame where the most entities are visible (for later VLM call)
-    frame_with_most_entities_idx, avg_confidence_score = (
-        select_frame_with_most_entities(result_i, pred_eious)
-    )
-
     # Generate entity visual prompt images
     visual_prompt_images, entity_frame_assignments = generate_entity_visual_prompts(
         panoptic_seg=result_i["pred_masks"],
@@ -667,6 +657,18 @@ if __name__ == "__main__":
         frame_dir=video_dir,
         frame_names=frame_names,
     )
+
+    # Identify the frame where the most entities are visible (for later VLM call)
+    frame_with_most_entities_idx, avg_confidence_score = (
+        select_frame_with_most_entities(result_i, pred_eious)
+    )
+
+    # Build and panoptic images and annotations
+    panoptic_images, predictions = build_panoptic_frames_and_annotations(
+        video_id, frame_names, result_i, categories_dict
+    )
+
+    del pred_masks, pred_eious, pred_masks_list
 
     # After processing the video
     end_time = time.time()
