@@ -14,7 +14,7 @@ from natsort import natsorted
 from PIL import Image
 
 from inference.utils import save_generated_images
-from inference.vlm_classification import (
+from inference.entity_classification import (
     generate_entity_visual_prompts,
     select_frame_with_most_entities,
 )
