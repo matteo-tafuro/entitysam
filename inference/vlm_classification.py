@@ -170,7 +170,7 @@ def generate_entity_visual_prompts(
                 (mask_x1, mask_y1, mask_x2 + 1, mask_y2 + 1)
             )
 
-        save_name = f"entity_{seg_id:04d}_frame{t:05d}.png"
+        save_name = f"entity_{seg_id:04d}_frame{t:05d}"
 
         entity_frame_assignments[seg_id] = t
         imgs_with_filenames.append((save_name, im_cropped))
