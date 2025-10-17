@@ -13,16 +13,17 @@ import torch
 from natsort import natsorted
 from PIL import Image
 
-from inference.utils import save_generated_images
-from inference.vlm_classification import (
+from inference.entity_classification import (
     generate_entity_visual_prompts,
     select_frame_with_most_entities,
 )
+from inference.utils import save_generated_images
 from inference.vps import (
     build_panoptic_frames_and_annotations,
     post_process_results_for_vps,
 )
 from sam2.build_sam import build_sam2_video_query_iou_predictor
+from sam2.sam2_video_query_iou_predictor import SAM2VideoQueryIoUPredictor
 
 # VIPSeg uses 124 categories
 NUM_CATEGORIES = 124
@@ -104,7 +105,7 @@ if __name__ == "__main__":
     sam2_checkpoint = os.path.join(ckpt_dir, "model_0009999.pth")
 
     model_cfg = args.model_cfg
-    predictor = build_sam2_video_query_iou_predictor(
+    predictor: SAM2VideoQueryIoUPredictor = build_sam2_video_query_iou_predictor(
         model_cfg, sam2_checkpoint, mask_decoder_depth=args.mask_decoder_depth
     )
 
