@@ -77,7 +77,6 @@ def build_sam2(
     apply_postprocessing=True,
     **kwargs,
 ):
-
     if apply_postprocessing:
         hydra_overrides_extra = hydra_overrides_extra.copy()
         hydra_overrides_extra += [
@@ -172,6 +171,46 @@ def build_sam2_video_query_iou_predictor(
         model.eval()
     return model
 
+
+def build_sam2_camera_query_iou_predictor(
+    config_file,
+    ckpt_path=None,
+    device="cuda",
+    mode="eval",
+    hydra_overrides_extra=[],
+    apply_postprocessing=True,
+    mask_decoder_depth=8,
+    **kwargs,
+):
+    hydra_overrides = [
+        "++model._target_=sam2.sam2_camera_query_iou_predictor.SAM2CameraQueryIoUPredictor",
+        f"++model.sam_mask_decoder_extra_args.mask_decoder_depth={mask_decoder_depth}",
+    ]
+    if apply_postprocessing:
+        hydra_overrides_extra = hydra_overrides_extra.copy()
+        hydra_overrides_extra += [
+            # dynamically fall back to multi-mask if the single mask is not stable
+            "++model.sam_mask_decoder_extra_args.dynamic_multimask_via_stability=true",
+            "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_delta=0.05",
+            "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_thresh=0.98",
+            # the sigmoid mask logits on interacted frames with clicks in the memory encoder so that the encoded masks are exactly as what users see from clicking
+            "++model.binarize_mask_from_pts_for_mem_enc=true",
+            # fill small holes in the low-res masks up to `fill_hole_area` (before resizing them to the original video resolution)
+            "++model.fill_hole_area=8",
+        ]
+    hydra_overrides.extend(hydra_overrides_extra)
+
+    # Read config and init model
+    cfg = compose(config_name=config_file, overrides=hydra_overrides)
+    OmegaConf.resolve(cfg)
+    model = instantiate(cfg.model, _recursive_=True)
+    _load_checkpoint_tune(model, ckpt_path)
+    model = model.to(device)
+    if mode == "eval":
+        model.eval()
+    return model
+
+
 def _hf_download(model_id):
     from huggingface_hub import hf_hub_download
 
@@ -208,7 +247,7 @@ def _load_checkpoint(model, ckpt_path):
 def _load_checkpoint_tune(model, ckpt_path):
     if ckpt_path is not None:
         sd = torch.load(ckpt_path, map_location="cpu")["model"]
-        missing_keys, unexpected_keys = model.load_state_dict(sd,strict=False)
+        missing_keys, unexpected_keys = model.load_state_dict(sd, strict=False)
         if missing_keys:
             logging.info(missing_keys)
             print("Missing Keys:    ", missing_keys)
@@ -218,28 +257,37 @@ def _load_checkpoint_tune(model, ckpt_path):
         logging.info("Loaded checkpoint sucessfully")
 
         # Check if the second group exists before attempting to duplicate the weights
-        if hasattr(model.sam_mask_decoder, 'transformer_image'):
+        if hasattr(model.sam_mask_decoder, "transformer_image"):
             print("Duplicate weights for second group of decoder")
             _duplicate_weights_for_second_group(model.sam_mask_decoder)
 
+
 def _duplicate_weights_for_second_group(model):
     model.transformer_image.load_state_dict(model.transformer.state_dict())
-    
+
     model.iou_token_image.load_state_dict(model.iou_token.state_dict())
     model.mask_tokens_image.load_state_dict(model.mask_tokens.state_dict())
-    
+
     model.output_upscaling_image.load_state_dict(model.output_upscaling.state_dict())
-    
+
     if model.use_high_res_features:
         model.conv_s0_image.load_state_dict(model.conv_s0.state_dict())
         model.conv_s1_image.load_state_dict(model.conv_s1.state_dict())
-    
+
     for i in range(len(model.output_hypernetworks_mlps)):
-        model.output_hypernetworks_mlps_image[i].load_state_dict(model.output_hypernetworks_mlps[i].state_dict())
-    
-    model.iou_prediction_head_image.load_state_dict(model.iou_prediction_head.state_dict())
-    model.cls_prediction_head_image.load_state_dict(model.cls_prediction_head.state_dict())
-    
+        model.output_hypernetworks_mlps_image[i].load_state_dict(
+            model.output_hypernetworks_mlps[i].state_dict()
+        )
+
+    model.iou_prediction_head_image.load_state_dict(
+        model.iou_prediction_head.state_dict()
+    )
+    model.cls_prediction_head_image.load_state_dict(
+        model.cls_prediction_head.state_dict()
+    )
+
     if model.pred_obj_scores:
         model.obj_score_token_image.load_state_dict(model.obj_score_token.state_dict())
-        model.pred_obj_score_head_image.load_state_dict(model.pred_obj_score_head.state_dict())
+        model.pred_obj_score_head_image.load_state_dict(
+            model.pred_obj_score_head.state_dict()
+        )
