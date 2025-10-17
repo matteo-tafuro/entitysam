@@ -114,11 +114,6 @@ def post_process_results_for_vps(
     else:
         cur_scores = cur_scores + 0.5 * mask_quality_scores
 
-        print(
-            f"Post-processing into panoptic maps. Shap of cur_masks: {cur_masks.shape}, "
-            f"out_size: {out_size}."
-        )
-
         cur_masks = F.interpolate(cur_masks, size=out_size, mode="bilinear")
         cur_masks = cur_masks.sigmoid()
         is_bg = (cur_masks < mask_binary_threshold).sum(0) == len(cur_masks)
