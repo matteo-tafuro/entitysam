@@ -165,10 +165,9 @@ if __name__ == "__main__":
 
                 # panoptic_images is a ist of (png_filename, PIL Image) tuples for each frame. In thi case there is only one frame.
                 if args.viz_results:
-                    cv2.imshow(
-                        "Panoptic Segmentation",
-                        np.array(panoptic_images[0][1])[:, :, ::-1],
-                    )
+                    pano_bgr = np.array(panoptic_images[0][1])[:, :, ::-1]  # PIL → BGR
+                    side_by_side = np.hstack((frame, pano_bgr))
+                    cv2.imshow("Panoptic Segmentation", side_by_side)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
 
