@@ -1057,11 +1057,6 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
             feat_sizes,
         ) = self._get_feature(image, batch_size)
 
-        print("Running tracking on frame:", frame_idx)
-        print("Current image type:", image.dtype)
-        print("Current image shape:", image.shape)
-        print("Batch size:", batch_size)
-
         # point and mask should not appear as input simultaneously on the same frame
         assert point_inputs is None or mask_inputs is None
         current_out = self.track_step(
