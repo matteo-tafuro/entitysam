@@ -65,9 +65,7 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
                 np.array(img.convert("RGB").resize((image_size, image_size))) / 255.0
             )
             width, height = img.size
-        img = (
-            torch.from_numpy(img_np).permute(2, 0, 1).to(torch.float32)
-        )
+        img = torch.from_numpy(img_np).permute(2, 0, 1).to(torch.float32)
 
         img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
         img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
@@ -714,6 +712,7 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
         current_out, pred_masks, iou_pred, cls_logits_pred = (
             self._run_single_frame_inference(
                 output_dict=output_dict,
+                image=img,
                 frame_idx=self.frame_idx,
                 batch_size=batch_size,
                 is_init_cond_frame=False,
@@ -724,11 +723,8 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
             )
         )
 
-        self.frame_idx += 1
-        self.condition_state["num_frames"] += 1
-
-        # # Store the current output in non-conditioning memory
-        # self._manage_memory_obj(self.frame_idx, current_out)
+        # Store the current output in non-conditioning memory
+        self._manage_memory_obj(self.frame_idx, current_out)
 
         self._add_output_per_object(
             self.frame_idx, current_out, storage_key="non_cond_frame_outputs"
@@ -736,6 +732,8 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
         self.condition_state["frames_already_tracked"][self.frame_idx] = {
             "reverse": False
         }
+        self.frame_idx += 1
+        self.condition_state["num_frames"] += 1
 
         pred_eiou = iou_pred[:, 0] * cls_logits_pred.max(-1)[0].sigmoid()
         return self.frame_idx, obj_ids, pred_masks, pred_eiou
@@ -973,6 +971,29 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
         self.condition_state["frames_already_tracked"].clear()
 
     ###
+    def _get_feature(self, img, batch_size):
+        """Compute the image features on a given image batch."""
+        device = self.condition_state["device"]
+        image = img.to(device).float().unsqueeze(0)
+        backbone_out = self.forward_image(image)
+        # expand the features to have the same dimension as the number of objects
+        expanded_image = image.expand(batch_size, -1, -1, -1)
+        expanded_backbone_out = {
+            "backbone_fpn": backbone_out["backbone_fpn"].copy(),
+            "vision_pos_enc": backbone_out["vision_pos_enc"].copy(),
+        }
+        for i, feat in enumerate(expanded_backbone_out["backbone_fpn"]):
+            expanded_backbone_out["backbone_fpn"][i] = feat.expand(
+                batch_size, -1, -1, -1
+            )
+        for i, pos in enumerate(expanded_backbone_out["vision_pos_enc"]):
+            pos = pos.expand(batch_size, -1, -1, -1)
+            expanded_backbone_out["vision_pos_enc"][i] = pos
+
+        features = self._prepare_backbone_features(expanded_backbone_out)
+        features = (expanded_image,) + features
+        return features
+
     def _get_image_feature(self, frame_idx, batch_size):
         """Compute the image features on a given frame."""
         # Look up in the cache first
@@ -1016,6 +1037,7 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
     def _run_single_frame_inference(
         self,
         output_dict,
+        image,
         frame_idx,
         batch_size,
         is_init_cond_frame,
@@ -1033,7 +1055,12 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
             current_vision_feats,
             current_vision_pos_embeds,
             feat_sizes,
-        ) = self._get_image_feature(frame_idx, batch_size)
+        ) = self._get_feature(image, batch_size)
+
+        print("Running tracking on frame:", frame_idx)
+        print("Current image type:", image.dtype)
+        print("Current image shape:", image.shape)
+        print("Batch size:", batch_size)
 
         # point and mask should not appear as input simultaneously on the same frame
         assert point_inputs is None or mask_inputs is None
@@ -1050,9 +1077,7 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
             track_in_reverse=reverse,
             run_mem_encoder=run_mem_encoder,
             prev_sam_mask_logits=prev_sam_mask_logits,
-            normed_ori_image=self.condition_state["images"][frame_idx : frame_idx + 1][
-                0
-            ].unsqueeze(0),  # Extract the single image and add batch dim back
+            normed_ori_image=image.unsqueeze(0),  # Add batch dim
         )
 
         # optionally offload the output to CPU memory to save GPU space
