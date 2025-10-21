@@ -113,6 +113,9 @@ if __name__ == "__main__":
 
     query_to_category_map = {i: np.random.randint(NUM_CATEGORIES) for i in range(50)}
 
+    # Initialize per-entity best scores
+    best_entity_scores = {i: {"score": -1, "frame_idx": None} for i in range(50)}
+
     # Initialize model
     torch.cuda.reset_peak_memory_stats()
     sam2_checkpoint = os.path.join(args.ckpt_dir, "model_0009999.pth")
@@ -159,6 +162,16 @@ if __name__ == "__main__":
                     query_to_category_map=query_to_category_map,
                 )
 
+                # Keep track of best scoring frames for each entity
+                for entity in result_i["segments_infos"]:
+                    query_id = entity["id"]
+                    score = entity["score"]
+                    if score > best_entity_scores[query_id]["score"]:
+                        best_entity_scores[query_id] = {
+                            "score": score,
+                            "frame_idx": out_frame_idx,
+                        }
+
                 # Build and panoptic images and annotations
                 panoptic_images, predictions = build_panoptic_frames_and_annotations(
                     video_id, [f"frame_{out_frame_idx:04d}"], result_i, categories_dict
@@ -178,8 +191,6 @@ if __name__ == "__main__":
                     )
 
                 # TODO: summary dict (predictions) needs to grow over frames
-                # TODO: implement visual prompt extraction for real-time.
-                #       e.g. save best frame index and confidence from the last N frames?
 
             # Update running statistics
             total_frames += 1
