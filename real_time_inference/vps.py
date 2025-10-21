@@ -1,6 +1,7 @@
 import os
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Literal, Optional, Tuple
 
+import cv2
 import numpy as np
 import torch
 from panopticapi.utils import IdGenerator
@@ -122,44 +123,49 @@ def build_panoptic_frame_and_annotations(
     frame_name: str,
     panoptic_outputs: Dict[str, Any],
     categories_by_id: Dict[int, Dict[str, Any]],
+    visualization: Literal["solid", "overlay"] = "solid",
+    orig_bgr_frame: Optional[np.ndarray] = None,
+    alpha: float = 0.55,
+    contour_thickness: int = 2,
 ) -> Tuple[Tuple[str, Image.Image], Dict[str, Any]]:
     """
-    Generate a colorized PNG for a single frame from a panoptic ID map and
-    build a COCO/VIPSeg-style annotation dict for that frame.
+    Generate a visualization PNG (solid or overlay) for a frame from a panoptic ID map
+    and build a COCO/VIPSeg-style annotation dict.
 
     Args:
         video_id: Identifier for the video this frame belongs to.
         frame_name: Path or filename of the input frame.
         panoptic_outputs: Dict with keys:
             - "image_size": (height, width)
-            - "pred_masks": Per-pixel entity IDs for the frame; shape (H, W) or (1, H, W).
-            - "segments_infos": List of dicts from post-processing; each has keys like
-                {"id": int, "category_id": int, ...}.
-        categories_by_id: Mapping category_id -> {"id": int, "isthing": int, "color": [R,G,B]}.
+            - "pred_masks": Per-pixel entity IDs; shape (H, W) or (1, H, W).
+            - "segments_infos": List of dicts; each has {"id", "category_id", ...}.
+        categories_by_id: Mapping category_id -> {"id", "isthing", "color": [R,G,B]}.
+        visualization: "solid" for a colorized render, "overlay" to blend over the original.
+        orig_bgr_frame: Required if visualization == "overlay". Original frame (H, W, 3) BGR.
+        alpha: Blend factor for overlay (mask areas only).
+        contour_thickness: Thickness for entity contours.
 
     Returns:
-        A tuple (image_output, annotations) where:
-            image_output: (png_filename, PIL.Image) for this frame.
-            annotations: {
-                "annotations": {
-                    "segments_info": List[dict],
-                    "file_name": str
-                },
-                "video_id": str
-            }.
+        (image_output, annotations)
+        image_output: (png_filename, PIL.Image)
+        annotations: {"annotations": {"segments_info": [...], "file_name": str}, "video_id": str}
     """
     height, width = panoptic_outputs["image_size"]
-    seg_id_map = panoptic_outputs["pred_masks"]  # [1, H, W]
-    seg_id_map = seg_id_map.squeeze(0).detach().cpu().numpy()  # [H, W]
+    seg_id_map = (
+        torch.as_tensor(panoptic_outputs["pred_masks"])
+        .squeeze(0)
+        .detach()
+        .cpu()
+        .numpy()
+    )  # [H, W]
     segments_info_list = panoptic_outputs["segments_infos"]
 
-    # Colorize
+    # Compute segments_info and a solid color render (panoptic_rgb)
     id_color_gen = IdGenerator(categories_by_id)
     panoptic_rgb = np.zeros((height, width, 3), dtype=np.uint8)
-
     frame_segments: list[dict] = []
-    # Each item in segments_info_list contains either None (if the segment is not
-    # present in that frame) or a dict with keys: category_id, iscrowd, id, bbox, area
+
+    # We fill colors here, but we reuse it for the overlay source if needed
     for seg_info in segments_info_list:
         if seg_info is None:
             continue
@@ -167,15 +173,15 @@ def build_panoptic_frame_and_annotations(
         entity_id = int(seg_info["id"])
         category_id = int(seg_info["category_id"])
 
-        entity_mask = seg_id_map == entity_id
-        area = int(entity_mask.sum())
+        mask = seg_id_map == entity_id
+        area = int(mask.sum())
         if area == 0:
             continue
 
-        color = id_color_gen.get_color(category_id)
-        panoptic_rgb[entity_mask] = color
+        color = id_color_gen.get_color(category_id)  # RGB
+        panoptic_rgb[mask] = color
 
-        ys, xs = np.where(entity_mask)
+        ys, xs = np.where(mask)
         x0, y0 = int(xs.min()), int(ys.min())
         w = int(xs.max() - x0)
         h = int(ys.max() - y0)
@@ -189,9 +195,26 @@ def build_panoptic_frame_and_annotations(
             }
         )
 
-    png_filename = os.path.splitext(os.path.basename(frame_name))[0]
-    pil_image = Image.fromarray(panoptic_rgb)
+    # If visualization is solid, we're done
+    if visualization == "solid":
+        pil_image = Image.fromarray(panoptic_rgb)
 
+    # Otherwise, build an overlay with contours
+    elif visualization == "overlay":
+        pil_image = render_panoptic_overlay(
+            orig_bgr_frame=orig_bgr_frame,
+            seg_id_map=seg_id_map,
+            segments_info_list=segments_info_list,
+            categories_by_id=categories_by_id,
+            panoptic_rgb=panoptic_rgb,
+            alpha=alpha,
+            contour_thickness=contour_thickness,
+        )
+
+    else:
+        raise ValueError(f"Unknown visualization mode: {visualization!r}")
+
+    png_filename = os.path.splitext(os.path.basename(frame_name))[0]
     annotations = {
         "annotations": {
             "segments_info": frame_segments,
@@ -199,5 +222,85 @@ def build_panoptic_frame_and_annotations(
         },
         "video_id": video_id,
     }
-
     return (png_filename, pil_image), annotations
+
+
+def render_panoptic_overlay(
+    *,
+    orig_bgr_frame: np.ndarray,
+    seg_id_map: np.ndarray,  # [H, W], int ids, 0 = background
+    segments_info_list: list[dict],
+    categories_by_id: Dict[int, Dict[str, Any]],
+    panoptic_rgb: np.ndarray,  # [H, W, 3], RGB solid render
+    alpha: float = 0.5,
+    contour_thickness: int = 2,
+) -> Image.Image:
+    """
+    Render an overlay by blending `panoptic_rgb` over the original frame and drawing contours.
+
+    Args:
+        orig_bgr_frame: Original frame in BGR, shape (H, W, 3).
+        seg_id_map: Per-pixel entity ids, 0 = background.
+        segments_info_list: List of segment dicts with keys like {"id", "category_id", ...}.
+        categories_by_id: Mapping category_id -> {"id", "isthing", "color": [R,G,B]}.
+        panoptic_rgb: Solid color panoptic render (RGB) of shape (H, W, 3).
+        alpha: Blend factor applied only on entity pixels.
+        contour_thickness: Thickness for the entity contours.
+
+    Returns:
+        A PIL RGB image with overlay + contours.
+    """
+
+    height, width = seg_id_map.shape
+
+    # Sanity checks
+    if orig_bgr_frame is None:
+        raise ValueError(
+            "orig_bgr_frame must be provided when visualization='overlay'."
+        )
+    if orig_bgr_frame.shape[:2] != (height, width):
+        raise ValueError("Original frame and panoptic mask must have matching shapes.")
+
+    rgb = cv2.cvtColor(orig_bgr_frame, cv2.COLOR_BGR2RGB)
+
+    entity_mask = seg_id_map > 0  # Discard background
+    overlay = rgb.copy()
+    overlay[entity_mask] = (
+        (alpha * panoptic_rgb[entity_mask].astype(np.float32))
+        + ((1.0 - alpha) * rgb[entity_mask].astype(np.float32))
+    ).astype(np.uint8)
+
+    # Draw contours (one quick pass using seg_id_map)
+    overlay_bgr = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
+    for seg in segments_info_list:
+        if seg is None:
+            continue
+        eid = int(seg["id"])
+        cat_id = int(seg["category_id"])
+        mask = seg_id_map == eid
+        if not mask.any():
+            continue
+
+        # Find contours on binary mask. Do some erosion to avoid overlapping lines
+        mask_u8 = (mask.astype(np.uint8)) * 255
+        inset = max(1, contour_thickness // 2)
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * inset + 1, 2 * inset + 1)
+        )
+        mask_inset = cv2.erode(mask_u8, kernel, iterations=1)
+        contours, _ = cv2.findContours(
+            mask_inset, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        r, g, b = categories_by_id[cat_id]["color"]
+        color_bgr = (b, g, r)
+        cv2.polylines(
+            overlay_bgr,
+            contours,
+            True,
+            color_bgr,
+            thickness=contour_thickness,
+            lineType=cv2.LINE_AA,
+        )
+
+    return Image.fromarray(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB))

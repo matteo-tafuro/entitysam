@@ -209,10 +209,12 @@ if __name__ == "__main__":
                 # Build and panoptic images and annotations
                 panoptic_img_with_filename, predictions = (
                     build_panoptic_frame_and_annotations(
-                        video_id,
-                        f"frame_{out_frame_idx:04d}",
-                        result_i,
-                        categories_dict,
+                        video_id=video_id,
+                        frame_name=f"frame_{out_frame_idx:04d}",
+                        panoptic_outputs=result_i,
+                        categories_by_id=categories_dict,
+                        visualization="overlay",
+                        orig_bgr_frame=frame,
                     )
                 )
                 panoptic_images.append(panoptic_img_with_filename)
@@ -256,4 +258,4 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
 
     print(f"Processed {total_frames} frames.")
-    print(f"Peak (GPU memory usage: {peak_memory:.2f} GB.")
+    print(f"Peak GPU memory usage: {peak_memory:.2f} GB.")
