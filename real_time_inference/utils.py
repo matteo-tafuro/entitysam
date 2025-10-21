@@ -9,8 +9,8 @@ from PIL import Image
 def save_generated_images(
     images: Iterable[Tuple[str, Image.Image]],
     output_dir: str,
+    extension: str = "jpg",
     subdir: Optional[str] = None,
-    extension: Optional[str] = "jpg",
 ) -> None:
     """
     Save a collection of PIL images to disk.
@@ -27,7 +27,7 @@ def save_generated_images(
 
     for filename, img in images:
         # Use suffix to choose format (e.g., .jpg -> JPEG, .png -> PNG)
-        fname = os.path.basename(filename)
+        fname = os.path.basename(filename) + f".{extension}"
         fmt = (
             "PNG"
             if extension == "png"
