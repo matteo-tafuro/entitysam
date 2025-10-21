@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import torch
 
-from real_time_inference.utils import save_generated_images
+from real_time_inference.utils import save_generated_images, save_video
 from real_time_inference.vps import (
     build_panoptic_frames_and_annotations,
     post_process_results_for_vps,
@@ -72,13 +72,27 @@ if __name__ == "__main__":
         action="store_false",
         help="Do not save generated images.",
     )
+    save_video_group = parser.add_mutually_exclusive_group()
+    save_video_group.add_argument(
+        "--save_video",
+        dest="save_video",
+        action="store_true",
+        help="Save output video.",
+    )
+    save_video_group.add_argument(
+        "--no_save_video",
+        dest="save_video",
+        action="store_false",
+        help="Do not save output video.",
+    )
+
     parser.add_argument(
         "--output_root_dir",
         type=str,
         default="output_real_time",
         help="Root output directory",
     )
-    parser.set_defaults(save_images=True)
+    parser.set_defaults(save_images=False, save_video=True)
     args = parser.parse_args()
 
     # Log args
@@ -132,11 +146,17 @@ if __name__ == "__main__":
     total_frames = 0
     peak_memory = 0
     is_first_frame_initialized = False
+    panoptic_images = []
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
+
+            # If it's the 60th frame, break
+            if total_frames == 60:
+                break
+
             width, height = frame.shape[:2][::-1]
             out_size = (height, width)
 
@@ -173,13 +193,13 @@ if __name__ == "__main__":
                         }
 
                 # Build and panoptic images and annotations
-                panoptic_images, predictions = build_panoptic_frames_and_annotations(
+                panoptic_image, predictions = build_panoptic_frames_and_annotations(
                     video_id, [f"frame_{out_frame_idx:04d}"], result_i, categories_dict
                 )
+                panoptic_images.append(panoptic_image[0][1])
 
-                # panoptic_images is a ist of (png_filename, PIL Image) tuples for each frame. In thi case there is only one frame.
                 if args.viz_results:
-                    pano_bgr = np.array(panoptic_images[0][1])[:, :, ::-1]  # PIL → BGR
+                    pano_bgr = np.array(panoptic_image[0][1])[:, :, ::-1]  # PIL → BGR
                     side_by_side = np.hstack((frame, pano_bgr))
                     cv2.imshow("Panoptic Segmentation", side_by_side)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -187,7 +207,7 @@ if __name__ == "__main__":
 
                 if args.save_images:
                     save_generated_images(
-                        panoptic_images, output_dir=output_dir, subdir="panoptic_images"
+                        panoptic_image, output_dir=output_dir, subdir="panoptic_images"
                     )
 
                 # TODO: summary dict (predictions) needs to grow over frames
@@ -197,4 +217,11 @@ if __name__ == "__main__":
             current_peak_memory = torch.cuda.max_memory_allocated() / 1024**3  # GB
             peak_memory = max(peak_memory, current_peak_memory)
 
+    if args.save_video:
+        save_video(
+            panoptic_images,
+            output_name="panoptic_video",
+            output_dir=output_dir,
+            fps=30.0,
+        )
     cap.release()
