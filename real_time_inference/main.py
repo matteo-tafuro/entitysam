@@ -10,6 +10,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from real_time_inference.utils import save_generated_images, save_video
 from real_time_inference.vps import (
@@ -151,10 +152,14 @@ if __name__ == "__main__":
     is_first_frame_initialized = False
     panoptic_images = []
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        for frame_idx in range(0, frame_count, frame_stride):
+        for frame_idx in tqdm(range(0, frame_count, frame_stride)):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
+                break
+
+            # If it's the 60th frame, break
+            if total_frames == 60:
                 break
 
             width, height = frame.shape[:2][::-1]
@@ -216,6 +221,11 @@ if __name__ == "__main__":
             total_frames += 1
             current_peak_memory = torch.cuda.max_memory_allocated() / 1024**3  # GB
             peak_memory = max(peak_memory, current_peak_memory)
+            print(f"Processed frame {frame_idx}")
+            print(
+                f"Current peak memory: {current_peak_memory:.2f} GB, "
+                f"Overall peak memory: {peak_memory:.2f} GB."
+            )
 
     if args.save_video:
         save_video(
@@ -225,3 +235,8 @@ if __name__ == "__main__":
             fps=fps / frame_stride,
         )
     cap.release()
+    if args.viz_results:
+        cv2.destroyAllWindows()
+
+    print(f"Processed {total_frames} frames.")
+    print(f"Peak (GPU memory usage: {peak_memory:.2f} GB.")
