@@ -151,17 +151,21 @@ if __name__ == "__main__":
     peak_memory = 0
     is_first_frame_initialized = False
     panoptic_images = []
+
+    break_at_iteration = 60  # For faster testing
+
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         for frame_idx in tqdm(
-            range(0, frame_count, frame_stride), total=frame_count // frame_stride
+            range(0, frame_count, frame_stride),
+            total=(
+                break_at_iteration
+                if break_at_iteration
+                else frame_count // frame_stride
+            ),
         ):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
-                break
-
-            # If it's the 60th frame, break
-            if total_frames == 60:
                 break
 
             width, height = frame.shape[:2][::-1]
