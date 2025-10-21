@@ -142,19 +142,19 @@ if __name__ == "__main__":
     # Read video frames as a stream
     video_path = "/home/amiuser/repos/entitysam/data/robot_logger_device_2025_09_25_12_16_57_realsense_rgb_30fps.mp4"
     cap = cv2.VideoCapture(video_path)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)  # Should be around 30
+    frame_stride = 15
 
     total_frames = 0
     peak_memory = 0
     is_first_frame_initialized = False
     panoptic_images = []
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        while True:
+        for frame_idx in range(0, frame_count, frame_stride):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
-                break
-
-            # If it's the 60th frame, break
-            if total_frames == 60:
                 break
 
             width, height = frame.shape[:2][::-1]
@@ -222,6 +222,6 @@ if __name__ == "__main__":
             panoptic_images,
             output_name="panoptic_video",
             output_dir=output_dir,
-            fps=30.0,
+            fps=fps / frame_stride,
         )
     cap.release()
