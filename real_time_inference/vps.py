@@ -1,9 +1,9 @@
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import torch
-from panopticapi.utils import IdGenerator, rgb2id
+from panopticapi.utils import IdGenerator
 from PIL import Image
 from torch.nn import functional as F
 
@@ -80,7 +80,7 @@ def post_process_results_for_vps(
     for k in range(category_ids.shape[0]):  # N
         cur_masks_k = pred_masks[k].squeeze(0)  # (1, H, W)
 
-        cat_id = int(category_ids[k]) + 1  # start from 1
+        cat_id = int(category_ids[k])
         isthing = True  # class-agnostic entities
 
         mask_area = (cur_mask_ids == k).sum().item()
@@ -117,119 +117,87 @@ def post_process_results_for_vps(
     }
 
 
-def build_panoptic_frames_and_annotations(
+def build_panoptic_frame_and_annotations(
     video_id: str,
-    frame_names: List[str],
+    frame_name: str,
     panoptic_outputs: Dict[str, Any],
     categories_by_id: Dict[int, Dict[str, Any]],
-) -> Tuple[List[Tuple[str, Image.Image]], Dict[str, Any]]:
+) -> Tuple[Tuple[str, Image.Image], Dict[str, Any]]:
     """
-    Generates a colorized PNG for each frame (one PNG per input frame) using the panoptic
-    segmentation map and a deterministic color generator keyed by `categories_by_id`.
-    For each frame, it also builds a COCO-style list of segment annotations with
-    bbox and area, aligned with VIPSeg conventions.
+    Generate a colorized PNG for a single frame from a panoptic ID map and
+    build a COCO/VIPSeg-style annotation dict for that frame.
 
     Args:
-        video_id: String identifier for the video.
-        frame_names: List of input frame file names (str) in the video, in order.
+        video_id: Identifier for the video this frame belongs to.
+        frame_name: Path or filename of the input frame.
         panoptic_outputs: Dict with keys:
-            - "image_size": Tuple[int,int] (height, width)
-            - "pred_masks": A 2D map per frame where each pixel value is an entity ID
-            - "segments_infos": list of dicts, one per entity from `post_process_results_for_vps`.
-        categories_by_id: Dict mapping category_id (int) to dict with keys:
-            - "id": int, category ID
-            - "isthing": int, 1 if thing, 0 if stuff
-            - "color": List[int,int,int], RGB color for visualization
+            - "image_size": (height, width)
+            - "pred_masks": Per-pixel entity IDs for the frame; shape (H, W) or (1, H, W).
+            - "segments_infos": List of dicts from post-processing; each has keys like
+                {"id": int, "category_id": int, ...}.
+        categories_by_id: Mapping category_id -> {"id": int, "isthing": int, "color": [R,G,B]}.
 
     Returns:
-        A tuple (images, annotations) where:
-            images: List of (png_filename, PIL Image) tuples for each frame.
-            annotations: Dict with keys {"annotations": List[per-frame dict], "video_id": str}.
+        A tuple (image_output, annotations) where:
+            image_output: (png_filename, PIL.Image) for this frame.
+            annotations: {
+                "annotations": {
+                    "segments_info": List[dict],
+                    "file_name": str
+                },
+                "video_id": str
+            }.
     """
-    H, W = panoptic_outputs["image_size"]  # (H, W)
-    pan_seg_result = panoptic_outputs["pred_masks"]  # [T,H,W]
-    segments_infos = panoptic_outputs["segments_infos"]
+    height, width = panoptic_outputs["image_size"]
+    seg_id_map = panoptic_outputs["pred_masks"]  # [1, H, W]
+    seg_id_map = seg_id_map.squeeze(0).detach().cpu().numpy()  # [H, W]
+    segments_info_list = panoptic_outputs["segments_infos"]
 
-    T = pan_seg_result.shape[0]
-    # Sanity check
-    assert len(frame_names) == T, (
-        f"Number of frame names ({len(frame_names)}) does not match number "
-        f"of frames in pan_seg_result ({T})."
-    )
+    # Colorize
+    id_color_gen = IdGenerator(categories_by_id)
+    panoptic_rgb = np.zeros((height, width, 3), dtype=np.uint8)
 
-    color_generator = IdGenerator(categories_by_id)
+    frame_segments: list[dict] = []
+    # Each item in segments_info_list contains either None (if the segment is not
+    # present in that frame) or a dict with keys: category_id, iscrowd, id, bbox, area
+    for seg_info in segments_info_list:
+        if seg_info is None:
+            continue
 
-    # Pre-initialize result array [T,H,W,3]
-    panoptic_rgb = np.zeros((T, H, W, 3), dtype=np.uint8)
+        entity_id = int(seg_info["id"])
+        category_id = int(seg_info["category_id"])
 
-    # ---- Build per-frame annotations for VIPSeg/COCO format ----
+        entity_mask = seg_id_map == entity_id
+        area = int(entity_mask.sum())
+        if area == 0:
+            continue
 
-    # List of length N (num segments) where each item is a list of length T (num frames).
-    # Each inner list contains either None (if the segment is not present in that frame)
-    # or a dict with keys: category_id, iscrowd, id, bbox, area
-    per_segment_per_frame_ann = []
-    for seg_info in segments_infos:
-        entity_id = seg_info["id"]
-        category_id = seg_info["category_id"]
-
-        entity_mask = (
-            (pan_seg_result == entity_id).cpu().numpy()
-        )  # Binary mask over time for this entity ID, still [T,H,W]
-
-        color = color_generator.get_color(category_id)
+        color = id_color_gen.get_color(category_id)
         panoptic_rgb[entity_mask] = color
 
-        # VIPSeg/COCO format template
-        base_ann = {
-            "category_id": int(category_id) - 1,  # 0-indexed
-            "iscrowd": 0,
-            "id": int(rgb2id(color)),
-        }
-        # Build per-frame annotation list: bbox + area, or None if not on frame
-        per_frame_ann = []
-        for t in range(T):
-            area = int(entity_mask[t].sum())
-            if area == 0:
-                per_frame_ann.append(None)
-                continue
+        ys, xs = np.where(entity_mask)
+        x0, y0 = int(xs.min()), int(ys.min())
+        w = int(xs.max() - x0)
+        h = int(ys.max() - y0)
 
-            # Compute tight bbox (x, y, w, h) for the mask on this frame
-            ys, xs = np.where(entity_mask[t])
-            x0, y0 = int(xs.min()), int(ys.min())
-            w = int(xs.max() - x0)
-            h = int(ys.max() - y0)
-
-            ann = {
+        frame_segments.append(
+            {
+                "entity_id": entity_id,
+                "category_id": category_id,
                 "bbox": [x0, y0, w, h],
                 "area": area,
             }
-            ann.update(base_ann)
-            per_frame_ann.append(ann)
-
-        per_segment_per_frame_ann.append(per_frame_ann)
-
-    image_outputs = []
-    per_frame_outputs = []
-    for t, image_name in enumerate(frame_names):
-        pil_img = Image.fromarray(panoptic_rgb[t])
-        save_name = image_name.split("/")[-1].split(".")[0]
-        image_outputs.append((save_name, pil_img))
-
-        # Collect this frame's annotations by taking the t-th element for each segment
-        frame_segments = [
-            seg_ann[t]
-            for seg_ann in per_segment_per_frame_ann
-            if seg_ann[t] is not None
-        ]
-        per_frame_outputs.append(
-            {
-                # If None, the segment is not present in this frame
-                "segments_info": frame_segments,
-                "file_name": os.path.basename(image_name),
-            }
         )
 
-    del panoptic_outputs
+    png_filename = os.path.splitext(os.path.basename(frame_name))[0]
+    pil_image = Image.fromarray(panoptic_rgb)
 
-    annotations = {"annotations": per_frame_outputs, "video_id": video_id}
-    return image_outputs, annotations
+    annotations = {
+        "annotations": {
+            "segments_info": frame_segments,
+            "file_name": os.path.basename(frame_name),
+        },
+        "video_id": video_id,
+    }
+
+    return (png_filename, pil_image), annotations

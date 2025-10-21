@@ -14,14 +14,14 @@ from tqdm import tqdm
 
 from real_time_inference.utils import save_generated_images, save_video
 from real_time_inference.vps import (
-    build_panoptic_frames_and_annotations,
+    build_panoptic_frame_and_annotations,
     post_process_results_for_vps,
 )
 from sam2.build_sam import build_sam2_camera_query_iou_predictor
 from sam2.sam2_camera_query_iou_predictor import SAM2CameraQueryIoUPredictor
 
-# VIPSeg uses 124 categories
-NUM_CATEGORIES = 124
+NUM_QUERIES = 50  # That's what the model uses
+NUM_CATEGORIES = 124  # OG code used 124 as in VIPSeg
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -112,21 +112,21 @@ if __name__ == "__main__":
     )
     if args.save_images:
         os.makedirs(output_dir, exist_ok=True)
-    # Build (fake) categories dict
-    categories_dict = dict()
-    for cat_id in range(1, NUM_CATEGORIES + 1):
-        tmp_cat = {
+
+    # Build (fake) categories dict, used later for visualization
+    categories_dict = {
+        cat_id: {
             "id": cat_id,
             "isthing": 1,
-            "color": [
-                np.random.randint(0, 256),
-                np.random.randint(0, 256),
-                np.random.randint(0, 256),
-            ],
+            "color": np.random.randint(0, 255, size=3).tolist(),
         }
-        categories_dict[cat_id] = tmp_cat
-
-    query_to_category_map = {i: np.random.randint(NUM_CATEGORIES) for i in range(50)}
+        for cat_id in range(1, NUM_CATEGORIES + 1)
+    }
+    # Map query index → unique category ID
+    chosen_cats = np.random.choice(
+        np.arange(1, NUM_CATEGORIES + 1), size=NUM_QUERIES, replace=False
+    )
+    query_to_category_map = {i: int(chosen_cats[i]) for i in range(NUM_QUERIES)}
 
     # Initialize per-entity best scores
     best_entity_scores = {i: {"score": -1, "frame_idx": None} for i in range(50)}
@@ -198,24 +198,24 @@ if __name__ == "__main__":
                         }
 
                 # Build and panoptic images and annotations
-                panoptic_image, predictions = build_panoptic_frames_and_annotations(
-                    video_id, [f"frame_{out_frame_idx:04d}"], result_i, categories_dict
+                panoptic_img_with_filename, predictions = (
+                    build_panoptic_frame_and_annotations(
+                        video_id,
+                        f"frame_{out_frame_idx:04d}",
+                        result_i,
+                        categories_dict,
+                    )
                 )
-                panoptic_images.append(panoptic_image[0][1])
+                panoptic_images.append(panoptic_img_with_filename)
 
                 if args.viz_results:
-                    pano_bgr = np.array(panoptic_image[0][1])[:, :, ::-1]  # PIL → BGR
+                    pano_bgr = np.array(panoptic_img_with_filename[0])[
+                        :, :, ::-1
+                    ]  # PIL → BGR
                     side_by_side = np.hstack((frame, pano_bgr))
                     cv2.imshow("Panoptic Segmentation", side_by_side)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
-
-                if args.save_images:
-                    save_generated_images(
-                        panoptic_image, output_dir=output_dir, subdir="panoptic_images"
-                    )
-
-                # TODO: summary dict (predictions) needs to grow over frames
 
             # Update running statistics
             total_frames += 1
@@ -227,9 +227,17 @@ if __name__ == "__main__":
                 f"Overall peak memory: {peak_memory:.2f} GB."
             )
 
+    if args.save_images:
+        save_generated_images(
+            panoptic_images,
+            output_dir=output_dir,
+            subdir="panoptic_images",
+        )
+
+    # TODO: summary dict (predictions) needs to grow over frames
     if args.save_video:
         save_video(
-            panoptic_images,
+            [panoptic_images[i][1] for i in range(len(panoptic_images))],
             output_name="panoptic_video",
             output_dir=output_dir,
             fps=fps / frame_stride,
