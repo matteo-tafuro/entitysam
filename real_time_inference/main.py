@@ -111,6 +111,8 @@ if __name__ == "__main__":
         }
         categories_dict[cat_id] = tmp_cat
 
+    query_to_category_map = {i: np.random.randint(NUM_CATEGORIES) for i in range(50)}
+
     # Initialize model
     torch.cuda.reset_peak_memory_stats()
     sam2_checkpoint = os.path.join(args.ckpt_dir, "model_0009999.pth")
@@ -154,8 +156,7 @@ if __name__ == "__main__":
                     pred_ious=pred_eious,
                     pred_masks=pred_masks,
                     out_size=out_size,
-                    pred_stability_scores=pred_stability_scores,
-                    num_categories=NUM_CATEGORIES,
+                    query_to_category_map=query_to_category_map,
                 )
 
                 # Build and panoptic images and annotations
