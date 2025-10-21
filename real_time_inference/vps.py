@@ -212,7 +212,7 @@ def build_panoptic_frames_and_annotations(
     per_frame_outputs = []
     for t, image_name in enumerate(frame_names):
         pil_img = Image.fromarray(panoptic_rgb[t])
-        save_name = image_name.split("/")[-1].split(".")[0] + ".png"
+        save_name = image_name.split("/")[-1].split(".")[0]
         image_outputs.append((save_name, pil_img))
 
         # Collect this frame's annotations by taking the t-th element for each segment

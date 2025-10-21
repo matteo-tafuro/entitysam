@@ -10,6 +10,7 @@ def save_generated_images(
     images: Iterable[Tuple[str, Image.Image]],
     output_dir: str,
     subdir: Optional[str] = None,
+    extension: Optional[str] = "jpg",
 ) -> None:
     """
     Save a collection of PIL images to disk.
@@ -22,21 +23,18 @@ def save_generated_images(
     out_dir = output_dir if subdir is None else os.path.join(output_dir, subdir)
     os.makedirs(out_dir, exist_ok=True)
 
+    assert extension in {None, "jpg", "jpeg", "png"}, "Unsupported image extension."
+
     for filename, img in images:
         # Use suffix to choose format (e.g., .jpg -> JPEG, .png -> PNG)
-        extension = os.path.splitext(filename)[-1].lower()
         fname = os.path.basename(filename)
         fmt = (
             "PNG"
-            if extension == ".png"
+            if extension == "png"
             else "JPEG"
-            if extension in {".jpg", ".jpeg"}
+            if extension in {"jpg", "jpeg"}
             else None
         )
-        if fmt is None:
-            raise ValueError(
-                f"Unsupported image extension for '{fname}'. Use .png/.jpg/.jpeg."
-            )
         img.save(os.path.join(out_dir, fname), format=fmt)
 
 
@@ -77,3 +75,6 @@ def save_video(
 
     if video_writer is not None:
         video_writer.release()
+
+
+## uSE X264
