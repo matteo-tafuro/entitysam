@@ -247,7 +247,7 @@ if __name__ == "__main__":
     if args.save_video:
         save_video(
             [panoptic_images[i][1] for i in range(len(panoptic_images))],
-            output_name="panoptic_video",
+            output_name=f"{video_id}_panoptic_video",
             output_dir=output_dir,
             fps=fps / frame_stride,
         )
