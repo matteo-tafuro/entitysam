@@ -12,8 +12,8 @@ def post_process_results_for_vps(
     pred_ious: torch.Tensor,  # [1, N]
     pred_masks: torch.Tensor,  # [N, 1, H, W]
     out_size: Tuple[int, int],  # (H, W)
-    overlap_threshold: float = 0.4,
-    mask_binary_threshold: float = 0.02,
+    overlap_threshold: float = 0.25,
+    mask_binary_threshold: float = 0.025,
     query_to_category_map: Dict[int, int] = {},
 ) -> Dict[str, object]:
     """
@@ -73,14 +73,14 @@ def post_process_results_for_vps(
     is_bg = (pred_masks < mask_binary_threshold).sum(0) == len(pred_masks)
     cur_prob_masks = frame_scores.view(-1, 1, 1, 1).to(pred_masks.device) * pred_masks
 
-    cur_mask_ids = cur_prob_masks.argmax(0)  # (T, H, W)
+    cur_mask_ids = cur_prob_masks.argmax(0)  # (1, H, W)
     cur_mask_ids[is_bg] = -1
     del cur_prob_masks, is_bg
 
-    for k in range(category_ids.shape[0]):  # N_kept
-        cur_masks_k = pred_masks[k].squeeze(0)  # (T, H, W)
+    for k in range(category_ids.shape[0]):  # N
+        cur_masks_k = pred_masks[k].squeeze(0)  # (1, H, W)
 
-        pred_class = int(category_ids[k]) + 1  # start from 1
+        cat_id = int(category_ids[k]) + 1  # start from 1
         isthing = True  # class-agnostic entities
 
         mask_area = (cur_mask_ids == k).sum().item()
@@ -89,6 +89,7 @@ def post_process_results_for_vps(
 
         if mask_area > 0 and original_area > 0 and mask.sum().item() > 0:
             if mask_area / original_area < overlap_threshold:
+                current_segment_id += 1
                 continue
 
             current_segment_id += 1
@@ -98,7 +99,7 @@ def post_process_results_for_vps(
                 {
                     "id": current_segment_id,
                     "isthing": bool(isthing),
-                    "category_id": pred_class,
+                    "category_id": cat_id,
                     "score": frame_scores[k].item(),
                 }
             )
