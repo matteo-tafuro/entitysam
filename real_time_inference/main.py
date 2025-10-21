@@ -163,6 +163,9 @@ if __name__ == "__main__":
                 else frame_count // frame_stride
             ),
         ):
+            if total_frames == break_at_iteration:
+                break
+
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
