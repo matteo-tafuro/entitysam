@@ -152,7 +152,9 @@ if __name__ == "__main__":
     is_first_frame_initialized = False
     panoptic_images = []
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        for frame_idx in tqdm(range(0, frame_count, frame_stride)):
+        for frame_idx in tqdm(
+            range(0, frame_count, frame_stride), total=frame_count // frame_stride
+        ):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
