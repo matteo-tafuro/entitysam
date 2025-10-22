@@ -43,7 +43,7 @@ if __name__ == "__main__":
         "--mask_decoder_depth", type=int, default=8, help="Mask decoder depth"
     )
 
-    # === Whether to visualize results on the fly ===
+    # === Visualization options ===
     viz_results_group = parser.add_mutually_exclusive_group()
     viz_results_group.add_argument(
         "--viz_results",
@@ -58,6 +58,14 @@ if __name__ == "__main__":
         help="Do not visualize results on the fly.",
     )
     parser.set_defaults(viz_results=False)
+
+    parser.add_argument(
+        "--visualization_type",
+        type=str,
+        choices=["solid", "overlay"],
+        default="overlay",
+        help="Type of visualization for panoptic segmentation.",
+    )
 
     # === Saving options ===
     save_images_group = parser.add_mutually_exclusive_group()
@@ -213,7 +221,7 @@ if __name__ == "__main__":
                         frame_name=f"frame_{out_frame_idx:04d}",
                         panoptic_outputs=result_i,
                         categories_by_id=categories_dict,
-                        visualization="overlay",
+                        visualization=args.visualization_type,
                         orig_bgr_frame=frame,
                     )
                 )
