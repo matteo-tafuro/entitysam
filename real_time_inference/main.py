@@ -159,6 +159,7 @@ if __name__ == "__main__":
     peak_memory = 0
     is_first_frame_initialized = False
     panoptic_images = []
+    segments_annotations = {}  # Frame index -> list of segment annotations
 
     break_at_iteration = 60  # For faster testing
 
@@ -215,10 +216,9 @@ if __name__ == "__main__":
                         }
 
                 # Build and panoptic images and annotations
-                panoptic_img_with_filename, predictions = (
+                panoptic_img_with_filename, frame_segments_annotations = (
                     build_panoptic_frame_and_annotations(
-                        video_id=video_id,
-                        frame_name=f"frame_{out_frame_idx:04d}",
+                        frame_idx=out_frame_idx,
                         panoptic_outputs=result_i,
                         categories_by_id=categories_dict,
                         visualization=args.visualization_type,
@@ -226,6 +226,7 @@ if __name__ == "__main__":
                     )
                 )
                 panoptic_images.append(panoptic_img_with_filename)
+                segments_annotations[frame_idx] = frame_segments_annotations
 
                 if args.viz_results:
                     pano_bgr = np.array(panoptic_img_with_filename[0])[
@@ -253,7 +254,6 @@ if __name__ == "__main__":
             subdir="panoptic_images",
         )
 
-    # TODO: summary dict (predictions) needs to grow over frames
     if args.save_video:
         save_video(
             [panoptic_images[i][1] for i in range(len(panoptic_images))],

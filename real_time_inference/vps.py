@@ -1,4 +1,3 @@
-import os
 from typing import Any, Dict, Literal, Optional, Tuple
 
 import cv2
@@ -119,22 +118,20 @@ def post_process_results_for_vps(
 
 
 def build_panoptic_frame_and_annotations(
-    video_id: str,
-    frame_name: str,
+    frame_idx: int,
     panoptic_outputs: Dict[str, Any],
     categories_by_id: Dict[int, Dict[str, Any]],
     visualization: Literal["solid", "overlay"] = "solid",
     orig_bgr_frame: Optional[np.ndarray] = None,
     alpha: float = 0.55,
     contour_thickness: int = 2,
-) -> Tuple[Tuple[str, Image.Image], Dict[str, Any]]:
+) -> Tuple[Tuple[str, Image.Image], list[Dict[str, Any]]]:
     """
     Generate a visualization PNG (solid or overlay) for a frame from a panoptic ID map
     and build a COCO/VIPSeg-style annotation dict.
 
     Args:
-        video_id: Identifier for the video this frame belongs to.
-        frame_name: Path or filename of the input frame.
+        frame_idx: Index of the current frame.
         panoptic_outputs: Dict with keys:
             - "image_size": (height, width)
             - "pred_masks": Per-pixel entity IDs; shape (H, W) or (1, H, W).
@@ -146,9 +143,9 @@ def build_panoptic_frame_and_annotations(
         contour_thickness: Thickness for entity contours.
 
     Returns:
-        (image_output, annotations)
         image_output: (png_filename, PIL.Image)
-        annotations: {"annotations": {"segments_info": [...], "file_name": str}, "video_id": str}
+        frame_segments: List of dictionaries containing segment annotations (entity_id,
+            category_id, bbox, area) for the current frame.
     """
     height, width = panoptic_outputs["image_size"]
     seg_id_map = (
@@ -214,15 +211,8 @@ def build_panoptic_frame_and_annotations(
     else:
         raise ValueError(f"Unknown visualization mode: {visualization!r}")
 
-    png_filename = os.path.splitext(os.path.basename(frame_name))[0]
-    annotations = {
-        "annotations": {
-            "segments_info": frame_segments,
-            "file_name": os.path.basename(frame_name),
-        },
-        "video_id": video_id,
-    }
-    return (png_filename, pil_image), annotations
+    png_filename = f"frame_{frame_idx:04d}"
+    return (png_filename, pil_image), frame_segments
 
 
 def render_panoptic_overlay(
