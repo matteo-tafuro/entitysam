@@ -15,16 +15,16 @@ def post_process_results_for_vps(
     overlap_threshold: float = 0.25,
     mask_binary_threshold: float = 0.025,
     query_to_category_map: Dict[int, int] = {},
+    prev_owner_query_map: Optional[torch.Tensor] = None,
+    bias_strength: float = 0.1,
 ) -> Dict[str, object]:
     """
-    Convert per-frame, per-candidate mask predictions into panoptic video segments.
+    Convert per-frame predictions into a panoptic map, optionally using a temporal prior.
 
-    This function performs three main steps:
-      1. Selects a best frame per candidate from `pred_ious` (per-frame IoU matrix).
-      2. Aggregates per-candidate scores (mean over time), applies an absolute threshold
-         and a top-K cap, and optionally incorporates stability scores to re-weight candidates.
-      3. Runs pixel-wise competition (weighted by candidate scores) to produce a panoptic
-         segmentation map for each frame and filters segments using spatio-temporal overlap criteria.
+    Temporal prior:
+        If `prev_owner_query_map` is provided, we add `bias_strength` to the logits of
+        query k at pixels where the previous frame's winning query was k. Pixels marked
+        as background (-1) receive no bias (consistent with post-processed filtering).
 
     Args:
         pred_ious: Float tensor with shape [T, N]. T is the number of frames (after removing any
@@ -38,6 +38,9 @@ def post_process_results_for_vps(
             area and intersections.
         num_categories: Number of categories used for randomized visualization labels (class-agnostic
             behavior uses random assignment in this demo/training script).
+        prev_owner_query_map: Optional tensor with shape [H, W] containing the winning query ID
+            at each pixel in the previous frame. IDs are in 0..N-1; background pixels are -1.
+        bias_strength: Amount to add to the logits of the previous frame's winning query at each pixel.
 
     Returns:
         A dictionary with the following keys:
@@ -47,7 +50,11 @@ def post_process_results_for_vps(
           - "pred_ids": list[int] of original candidate ids surviving
           - "pred_best_frames": list[int] of best frame indices for each surviving candidate
           - "task": str, fixed to "vps"
+          - "owner_query_map": np.ndarray[int32] of shape (H, W), -1 for bg, else query idx.
     """
+
+    N = pred_masks.shape[0]
+    H, W = out_size
 
     # Entity-wise scores for the current frame
     frame_scores = pred_ious.squeeze(0)  # [N]
@@ -60,15 +67,34 @@ def post_process_results_for_vps(
     )
 
     panoptic_seg = torch.zeros(
-        (pred_masks.size(1), out_size[0], out_size[1]),
+        (1, H, W),
         dtype=torch.int32,
         device=pred_masks.device,
     )
     segments_infos = []
     out_ids = []
-    out_best_frames = []
     current_segment_id = 0
-    pred_masks = F.interpolate(pred_masks, size=out_size, mode="bilinear")
+    pred_masks = F.interpolate(pred_masks, size=(H, W), mode="bilinear")
+
+    # Temporal bias: add bias to logits where previous frame owned the pixel to encourage temporal consistency
+    if prev_owner_query_map is not None:
+        # Make one-hot of shape (H, W, N). We offset by +1 and drop class 0 (background)
+        prev_owner_one_hot = torch.nn.functional.one_hot(
+            (prev_owner_query_map + 1).clamp_min(0), num_classes=N + 1
+        )[..., 1:]
+
+        # To logits dtype and reshape to (N, 1, H, W)
+        bias_vol = (
+            prev_owner_one_hot.permute(2, 0, 1).unsqueeze(1).to(dtype=pred_masks.dtype)
+        )
+
+        # Scale and add in logit space
+        bias_scalar = torch.tensor(
+            bias_strength, dtype=pred_masks.dtype, device=pred_masks.device
+        )
+        pred_masks = pred_masks + bias_vol * bias_scalar
+        del prev_owner_one_hot, bias_vol
+
     pred_masks = pred_masks.sigmoid()
     is_bg = (pred_masks < mask_binary_threshold).sum(0) == len(pred_masks)
     cur_prob_masks = frame_scores.view(-1, 1, 1, 1).to(pred_masks.device) * pred_masks
@@ -76,6 +102,11 @@ def post_process_results_for_vps(
     cur_mask_ids = cur_prob_masks.argmax(0)  # (1, H, W)
     cur_mask_ids[is_bg] = -1
     del cur_prob_masks, is_bg
+
+    # [H, W] map where each pixel's winning query index is stored (-1 for bg)
+    curr_query_owner_map = torch.full(
+        (H, W), -1, dtype=torch.long, device=pred_masks.device
+    )
 
     for k in range(category_ids.shape[0]):  # N
         cur_masks_k = pred_masks[k].squeeze(0)  # (1, H, W)
@@ -95,6 +126,9 @@ def post_process_results_for_vps(
             current_segment_id += 1
             panoptic_seg[mask] = current_segment_id
 
+            # Record the owning query index
+            curr_query_owner_map[mask.squeeze(0)] = int(k)
+
             segments_infos.append(
                 {
                     "id": current_segment_id,
@@ -108,11 +142,11 @@ def post_process_results_for_vps(
     del pred_masks
 
     return {
-        "image_size": out_size,
+        "image_size": (H, W),
         "pred_masks": panoptic_seg.cpu(),
         "segments_infos": segments_infos,
         "pred_ids": out_ids,
-        "pred_best_frames": out_best_frames,
+        "owner_query_map": curr_query_owner_map,
         "task": "vps",
     }
 

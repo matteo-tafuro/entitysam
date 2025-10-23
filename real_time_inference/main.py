@@ -42,6 +42,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mask_decoder_depth", type=int, default=8, help="Mask decoder depth"
     )
+    # float to tune the strength of the temporal bias
+    parser.add_argument(
+        "--temporal_bias_strength",
+        type=float,
+        default=0.0,
+        help="Strength of the temporal bias for query selection",
+    )
 
     # === Visualization options ===
     viz_results_group = parser.add_mutually_exclusive_group()
@@ -112,6 +119,8 @@ if __name__ == "__main__":
 
     # Use datetime as video ID
     video_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if args.temporal_bias_strength != 0.0:
+        video_id += f"_{str(args.temporal_bias_strength).replace('.', 'p')}"
 
     # If we need to save results, create output dir
     output_dir = os.path.join(
@@ -149,7 +158,7 @@ if __name__ == "__main__":
     predictor.reset_state()
 
     # Read video frames as a stream
-    video_path = "/home/amiuser/repos/entitysam/data/robot_logger_device_2025_09_25_12_16_57_realsense_rgb_30fps.mp4"
+    video_path = "/home/amiuser/repos/entitysam/data/vids/robot_logger_device_2025_03_31_17_14_28.mp4"
     cap = cv2.VideoCapture(video_path)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)  # Should be around 30
@@ -160,12 +169,13 @@ if __name__ == "__main__":
     is_first_frame_initialized = False
     panoptic_images = []
     segments_annotations = {}  # Frame index -> list of segment annotations
+    prev_owner_query_map = None  # For temporal consistency
 
     break_at_iteration = 60  # For faster testing
 
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         for frame_idx in tqdm(
-            range(0, frame_count, frame_stride),
+            range(700, frame_count, frame_stride),
             total=(
                 break_at_iteration
                 if break_at_iteration
@@ -203,7 +213,11 @@ if __name__ == "__main__":
                     pred_masks=pred_masks,
                     out_size=out_size,
                     query_to_category_map=query_to_category_map,
+                    prev_owner_query_map=prev_owner_query_map,
+                    bias_strength=args.temporal_bias_strength,
                 )
+
+                prev_owner_query_map = result_i["owner_query_map"]
 
                 # Keep track of best scoring frames for each entity
                 for entity in result_i["segments_infos"]:
