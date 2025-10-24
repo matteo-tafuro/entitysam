@@ -28,6 +28,14 @@ if __name__ == "__main__":
         description="Run the model with a specified checkpoint directory on a specified video."
     )
 
+    # === Video input ===
+    parser.add_argument(
+        "--video_path",
+        type=str,
+        required=True,
+        help="Path to the input video file.",
+    )
+
     # === Model-specific arguments ===
     parser.add_argument(
         "--ckpt_dir", type=str, required=True, help="Checkpoint directory name"
@@ -158,8 +166,7 @@ if __name__ == "__main__":
     predictor.reset_state()
 
     # Read video frames as a stream
-    video_path = "/home/amiuser/repos/entitysam/data/vids/robot_logger_device_2025_03_31_17_14_28.mp4"
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(args.video_path)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)  # Should be around 30
     frame_stride = 15
