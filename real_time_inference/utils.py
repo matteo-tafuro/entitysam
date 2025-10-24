@@ -9,7 +9,7 @@ from PIL import Image
 def save_generated_images(
     images: Iterable[Tuple[str, Image.Image]],
     output_dir: str,
-    extension: str = "jpg",
+    extension: str = "png",
     subdir: Optional[str] = None,
 ) -> None:
     """
