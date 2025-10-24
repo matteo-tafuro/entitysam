@@ -6,15 +6,14 @@
 
 import torch
 import torch.distributed
-import torch.nn.functional as F
 import torch.nn as nn
-
+import torch.nn.functional as F
 from torch.nn.init import trunc_normal_
 
 from sam2.modeling.sam.mask_query_iou_decoder import MaskQueryIoUDecoder
 from sam2.modeling.sam.prompt_encoder import PromptEncoder
 from sam2.modeling.sam.transformer_query_iou import TwoWayQueryIoUTransformer
-from sam2.modeling.sam2_utils import get_1d_sine_pe, MLP, select_closest_cond_frames
+from sam2.modeling.sam2_utils import MLP, get_1d_sine_pe
 
 # a large negative value as a placeholder score for missing objects
 NO_OBJ_SCORE = -1024.0
@@ -224,7 +223,9 @@ class SAM2QueryIoUBase(torch.nn.Module):
         self.sam_mask_decoder = MaskQueryIoUDecoder(
             num_multimask_outputs=3,
             transformer=TwoWayQueryIoUTransformer(
-                depth=self.sam_mask_decoder_extra_args.mask_decoder_depth if self.sam_mask_decoder_extra_args else 2,
+                depth=self.sam_mask_decoder_extra_args.mask_decoder_depth
+                if self.sam_mask_decoder_extra_args
+                else 2,
                 embedding_dim=self.sam_prompt_embed_dim,
                 mlp_dim=2048,
                 num_heads=8,
@@ -256,25 +257,40 @@ class SAM2QueryIoUBase(torch.nn.Module):
             self.obj_ptr_tpos_proj = torch.nn.Identity()
 
         # Initialize new added modules
-        if self.image_encoder.trunk.get_num_layers() < 20: # vits
-            self.dinov2_feature_extractor = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
-        else: #vitl
-            self.dinov2_feature_extractor = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
+        if self.image_encoder.trunk.get_num_layers() < 20:  # vits
+            self.dinov2_feature_extractor = torch.hub.load(
+                "facebookresearch/dinov2", "dinov2_vits14"
+            )
+        else:  # vitl
+            self.dinov2_feature_extractor = torch.hub.load(
+                "facebookresearch/dinov2", "dinov2_vitl14"
+            )
 
-        self.dinov2_projector = nn.Linear(self.dinov2_feature_extractor.patch_embed.proj.out_channels, 256)
+        self.dinov2_projector = nn.Linear(
+            self.dinov2_feature_extractor.patch_embed.proj.out_channels, 256
+        )
 
-        embedding_dim=512
-        self.point_sampler_net = nn.MultiheadAttention(embed_dim=256, num_heads=8, batch_first=True)  # Adjust embed_dim as per your feature dimensions
+        embedding_dim = 512
+        self.point_sampler_net = nn.MultiheadAttention(
+            embed_dim=256, num_heads=8, batch_first=True
+        )  # Adjust embed_dim as per your feature dimensions
         self.point_sampler_num = nn.Linear(256, self.sam_mask_decoder.num_queries)
-        self.offset_attention = nn.MultiheadAttention(embed_dim=embedding_dim, num_heads=8, batch_first=True)
-        self.offset_fc = nn.Linear(embedding_dim, 2)  # Output x and y offsets for each point, adjust input features as per needs
-        self.offset_embedding = nn.Embedding(num_embeddings=self.sam_mask_decoder.num_queries, embedding_dim=embedding_dim)
+        self.offset_attention = nn.MultiheadAttention(
+            embed_dim=embedding_dim, num_heads=8, batch_first=True
+        )
+        self.offset_fc = nn.Linear(
+            embedding_dim, 2
+        )  # Output x and y offsets for each point, adjust input features as per needs
+        self.offset_embedding = nn.Embedding(
+            num_embeddings=self.sam_mask_decoder.num_queries,
+            embedding_dim=embedding_dim,
+        )
         self.offset_cls = nn.Linear(embedding_dim, 2)
-        
+
         # Placeholder for sampled points
         self.sampled_point_coords = None
 
-        self.backbone_feature_enhancement = nn.Linear(embedding_dim,256)
+        self.backbone_feature_enhancement = nn.Linear(embedding_dim, 256)
 
     def _forward_sam_heads(
         self,
@@ -333,62 +349,131 @@ class SAM2QueryIoUBase(torch.nn.Module):
 
         # Get sampled points for initial frame
         if is_init_cond_frame:
-            backbone_feature_flat = backbone_features[0][None,:].view(1, backbone_features[0].size(0), -1).permute(0, 2, 1)  # Flatten the high-res feature map
-            attention_scores, _ = self.point_sampler_net(backbone_feature_flat, backbone_feature_flat, backbone_feature_flat)  # Use attention to determine attention scores
+            backbone_feature_flat = (
+                backbone_features[0][None, :]
+                .view(1, backbone_features[0].size(0), -1)
+                .permute(0, 2, 1)
+            )  # Flatten the high-res feature map
+            attention_scores, _ = self.point_sampler_net(
+                backbone_feature_flat, backbone_feature_flat, backbone_feature_flat
+            )  # Use attention to determine attention scores
             attention_scores = self.point_sampler_num(attention_scores)
-            attention_weights = F.softmax(attention_scores, dim=1)  # Apply softmax to get attention weights
+            attention_weights = F.softmax(
+                attention_scores, dim=1
+            )  # Apply softmax to get attention weights
 
             # Adjust coordinates to match the resolution of the high_res_features (aligned with high-res size)
-            coords = torch.stack(torch.meshgrid(torch.arange(backbone_features[0].size(-2)), torch.arange(backbone_features[0].size(-1))), dim=-1).view(-1, 2).float().to(device)  # Shape: (H*W, 2)
-            coords = coords.unsqueeze(0) # Shape: (1, H*W, 2)
-            attention_weights = attention_weights.permute(0, 2, 1)  # Shape: (B, 50, H*W)
-            sampled_point_coords = torch.bmm(attention_weights, coords)  # Weighted sum to determine sampled points, Shape: (1, 50, 2)
+            coords = (
+                torch.stack(
+                    torch.meshgrid(
+                        torch.arange(backbone_features[0].size(-2)),
+                        torch.arange(backbone_features[0].size(-1)),
+                    ),
+                    dim=-1,
+                )
+                .view(-1, 2)
+                .float()
+                .to(device)
+            )  # Shape: (H*W, 2)
+            coords = coords.unsqueeze(0)  # Shape: (1, H*W, 2)
+            attention_weights = attention_weights.permute(
+                0, 2, 1
+            )  # Shape: (B, 50, H*W)
+            sampled_point_coords = torch.bmm(
+                attention_weights, coords
+            )  # Weighted sum to determine sampled points, Shape: (1, 50, 2)
             # Resize sampled points to match self.image_size before input to prompt encoder
-            sampled_point_coords[:, :, 0] *= (self.image_size / backbone_features[0].size(-1))
-            sampled_point_coords[:, :, 1] *= (self.image_size / backbone_features[0].size(-2))
-            self.sampled_point_coords = sampled_point_coords.detach()  # Store the sampled points for later frames
+            sampled_point_coords[:, :, 0] *= self.image_size / backbone_features[
+                0
+            ].size(-1)
+            sampled_point_coords[:, :, 1] *= self.image_size / backbone_features[
+                0
+            ].size(-2)
+            self.sampled_point_coords = (
+                sampled_point_coords.detach()
+            )  # Store the sampled points for later frames
 
-            cls_features = backbone_features.contiguous().view(B, backbone_features.size(1), -1).permute(0, 2, 1)
+            cls_features = (
+                backbone_features.contiguous()
+                .view(B, backbone_features.size(1), -1)
+                .permute(0, 2, 1)
+            )
 
-            normed_ori_image_resized = F.interpolate(normed_ori_image, size=(896, 896), mode='bilinear', align_corners=False)
-            dinov2_features = self.dinov2_feature_extractor.get_intermediate_layers(normed_ori_image_resized,n=1)[0]
-            dinov2_features = self.dinov2_projector(dinov2_features).repeat(B,1,1)
-            cls_features = torch.cat([cls_features,dinov2_features],dim=-1)
-            
+            assert normed_ori_image.ndim == 4, (
+                "normed_ori_image should have shape [B, 3, H, W]"
+            )
+
+            # normed_ori_image_resized should be of type bfloat16
+            normed_ori_image_resized = F.interpolate(
+                normed_ori_image,
+                size=(896, 896),
+                mode="bilinear",
+                align_corners=False,
+                antialias=True,
+            )
+
+            dinov2_features = self.dinov2_feature_extractor.get_intermediate_layers(
+                normed_ori_image_resized, n=1
+            )[0]
+            dinov2_features = self.dinov2_projector(dinov2_features).repeat(B, 1, 1)
+            cls_features = torch.cat([cls_features, dinov2_features], dim=-1)
+
             offset_embedding = self.offset_embedding.weight.unsqueeze(1)
-            offset_embedding, _ = self.offset_attention(offset_embedding, cls_features, cls_features)
+            offset_embedding, _ = self.offset_attention(
+                offset_embedding, cls_features, cls_features
+            )
             offset_embedding = offset_embedding.squeeze(1)
             cls_logits_pred = self.offset_cls(offset_embedding)
 
-
-            backbone_features_seg = self.backbone_feature_enhancement(cls_features).permute(0, 2, 1)
-            backbone_features_seg = backbone_features_seg.view(B, backbone_features_seg.size(1), 64, 64)
+            backbone_features_seg = self.backbone_feature_enhancement(
+                cls_features
+            ).permute(0, 2, 1)
+            backbone_features_seg = backbone_features_seg.view(
+                B, backbone_features_seg.size(1), 64, 64
+            )
 
         else:
             # Update sampled offset for subsequent frames based on image & memory feature
-            sampled_features = backbone_features.contiguous().view(B, backbone_features.size(1), -1).permute(0, 2, 1)  # Shape: (B, H*W, C)
+            sampled_features = (
+                backbone_features.contiguous()
+                .view(B, backbone_features.size(1), -1)
+                .permute(0, 2, 1)
+            )  # Shape: (B, H*W, C)
             offset_embedding = self.offset_embedding.weight.unsqueeze(1)
 
-            normed_ori_image_resized = F.interpolate(normed_ori_image, size=(896, 896), mode='bilinear', align_corners=False)
-            dinov2_features = self.dinov2_feature_extractor.get_intermediate_layers(normed_ori_image_resized,n=1)[0]
-            dinov2_features = self.dinov2_projector(dinov2_features).repeat(B,1,1)
-            sampled_features = torch.cat([sampled_features,dinov2_features],dim=-1)
+            normed_ori_image_resized = F.interpolate(
+                normed_ori_image, size=(896, 896), mode="bilinear", align_corners=False
+            )
+            dinov2_features = self.dinov2_feature_extractor.get_intermediate_layers(
+                normed_ori_image_resized, n=1
+            )[0]
+            dinov2_features = self.dinov2_projector(dinov2_features).repeat(B, 1, 1)
+            sampled_features = torch.cat([sampled_features, dinov2_features], dim=-1)
 
-            offset_embedding, _ = self.offset_attention(offset_embedding, sampled_features, sampled_features)  # Apply attention for context-aware offsets
+            offset_embedding, _ = self.offset_attention(
+                offset_embedding, sampled_features, sampled_features
+            )  # Apply attention for context-aware offsets
             offset_embedding = offset_embedding.squeeze(1)
-            offsets = self.offset_fc(offset_embedding) # Output offsets for each sampled point
+            offsets = self.offset_fc(
+                offset_embedding
+            )  # Output offsets for each sampled point
             # Update sampled points with predicted offsets (relative to previous frame)
-            sampled_point_coords = self.sampled_point_coords + offsets[None,:]
-            self.sampled_point_coords = sampled_point_coords.detach()  # Store the sampled points for later frames
-            
+            sampled_point_coords = self.sampled_point_coords + offsets[None, :]
+            self.sampled_point_coords = (
+                sampled_point_coords.detach()
+            )  # Store the sampled points for later frames
+
             cls_logits_pred = self.offset_cls(offset_embedding)
-            backbone_features_seg = self.backbone_feature_enhancement(sampled_features).permute(0, 2, 1)
-            backbone_features_seg = backbone_features_seg.view(B, backbone_features_seg.size(1), 64, 64)
+            backbone_features_seg = self.backbone_feature_enhancement(
+                sampled_features
+            ).permute(0, 2, 1)
+            backbone_features_seg = backbone_features_seg.view(
+                B, backbone_features_seg.size(1), 64, 64
+            )
 
         # Assign sampled points to point prompts
-        sam_point_coords = sampled_point_coords.permute(1,0,2) 
+        sam_point_coords = sampled_point_coords.permute(1, 0, 2)
         sam_point_labels = torch.ones(B, 1, dtype=torch.int32, device=device)
-
 
         if mask_inputs is not None:
             # If mask_inputs is provided, downsize it into low-res mask input if needed
@@ -657,9 +742,7 @@ class SAM2QueryIoUBase(torch.nn.Module):
                     t = frame_idx + t_diff if track_in_reverse else frame_idx - t_diff
                     if t < 0 or (num_frames is not None and t >= num_frames):
                         break
-                    out = output_dict["non_cond_frame_outputs"].get(
-                        t, None
-                    )
+                    out = output_dict["non_cond_frame_outputs"].get(t, None)
                     if out is not None:
                         pos_and_ptrs.append((t_diff, out["obj_ptr"]))
                 # If we have at least one object pointer, add them to the across attention
@@ -751,7 +834,9 @@ class SAM2QueryIoUBase(torch.nn.Module):
         if self.sigmoid_bias_for_mem_enc != 0.0:
             mask_for_mem = mask_for_mem + self.sigmoid_bias_for_mem_enc
         maskmem_out = self.memory_encoder(
-            pix_feat, mask_for_mem, skip_mask_sigmoid=True  # sigmoid already applied
+            pix_feat,
+            mask_for_mem,
+            skip_mask_sigmoid=True,  # sigmoid already applied
         )
         maskmem_features = maskmem_out["vision_features"]
         maskmem_pos_enc = maskmem_out["vision_pos_enc"]
@@ -804,7 +889,7 @@ class SAM2QueryIoUBase(torch.nn.Module):
             with torch.no_grad():
                 pix_feat = self._prepare_memory_conditioned_features(
                     frame_idx=frame_idx,
-                    is_init_cond_frame=(frame_idx==0),
+                    is_init_cond_frame=(frame_idx == 0),
                     current_vision_feats=current_vision_feats[-1:],
                     current_vision_pos_embeds=current_vision_pos_embeds[-1:],
                     feat_sizes=feat_sizes[-1:],
@@ -826,7 +911,7 @@ class SAM2QueryIoUBase(torch.nn.Module):
                 mask_inputs=mask_inputs,
                 high_res_features=high_res_features,
                 multimask_output=multimask_output,
-                is_init_cond_frame=(frame_idx==0),
+                is_init_cond_frame=(frame_idx == 0),
                 normed_ori_image=normed_ori_image,
             )
 

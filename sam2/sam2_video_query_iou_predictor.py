@@ -8,13 +8,11 @@ import warnings
 from collections import OrderedDict
 
 import torch
-
+from detectron2.structures import ImageList
 from tqdm import tqdm
 
 from sam2.modeling.sam2_query_iou_base import NO_OBJ_SCORE, SAM2QueryIoUBase
 from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames
-
-from detectron2.structures import Boxes, ImageList, Instances, BitMasks
 
 
 class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
@@ -49,38 +47,42 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
             self.img_std = (0.229, 0.224, 0.225)
 
             self.prepare_targets = PrepareTargets(
-                num_frames = 10,          
-                max_num_masks = 30,       
-                text_prompt_enable = False,
-                custom_videos_text=[],   
-                device = self.device,
+                num_frames=10,
+                max_num_masks=30,
+                text_prompt_enable=False,
+                custom_videos_text=[],
+                device=self.device,
             )
 
             matcher = VideoHungarianMatcherUniClsag(
-                cost_class=3.0,     
-                cost_mask=5.0,      
-                cost_dice=5.0,      
-                cost_proj=5.0,      
-                num_points=12544,   
-                boxvis_enabled=False,    
+                cost_class=3.0,
+                cost_mask=5.0,
+                cost_dice=5.0,
+                cost_proj=5.0,
+                num_points=12544,
+                boxvis_enabled=False,
             )
 
-            weight_dict ={'loss_ce': 5.0, 'loss_mask': 5.0, 'loss_dice': 5.0, 'loss_iou': 5.0}
+            weight_dict = {
+                "loss_ce": 5.0,
+                "loss_mask": 5.0,
+                "loss_dice": 5.0,
+                "loss_iou": 5.0,
+            }
             self.criterion = VideoSetCriterionClsagIoU(
-                133, # num_classes
+                133,  # num_classes
                 matcher=matcher,
                 weight_dict=weight_dict,
-                eos_coef=0.1,  
-                losses=['labels', 'masks', 'ious'],
-                num_frames=8,          
-                num_points=12544,      
-                use_ctt_loss=True,     
-                oversample_ratio=3.0,  
+                eos_coef=0.1,
+                losses=["labels", "masks", "ious"],
+                num_frames=8,
+                num_points=12544,
+                use_ctt_loss=True,
+                oversample_ratio=3.0,
                 importance_sample_ratio=0.5,
                 max_num_masks=30,
-                boxvis_enabled=False,  
+                boxvis_enabled=False,
             )
-
 
     @torch.inference_mode()
     def init_state(
@@ -324,7 +326,7 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
             prev_sam_mask_logits = prev_out["pred_masks"].to(device, non_blocking=True)
             # Clamp the scale of prev_sam_mask_logits to avoid rare numerical issues.
             prev_sam_mask_logits = torch.clamp(prev_sam_mask_logits, -32.0, 32.0)
-        current_out, _, _, _= self._run_single_frame_inference(
+        current_out, _, _, _ = self._run_single_frame_inference(
             inference_state=inference_state,
             output_dict=obj_output_dict,  # run on the slice of a single object
             frame_idx=frame_idx,
@@ -763,16 +765,18 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
                 pred_masks = current_out["pred_masks"]
             else:
                 storage_key = "non_cond_frame_outputs"
-                current_out, pred_masks, iou_pred, cls_logits_pred = self._run_single_frame_inference(
-                    inference_state=inference_state,
-                    output_dict=output_dict,
-                    frame_idx=frame_idx,
-                    batch_size=batch_size,
-                    is_init_cond_frame=False,
-                    point_inputs=None,
-                    mask_inputs=None,
-                    reverse=reverse,
-                    run_mem_encoder=True,
+                current_out, pred_masks, iou_pred, cls_logits_pred = (
+                    self._run_single_frame_inference(
+                        inference_state=inference_state,
+                        output_dict=output_dict,
+                        frame_idx=frame_idx,
+                        batch_size=batch_size,
+                        is_init_cond_frame=False,
+                        point_inputs=None,
+                        mask_inputs=None,
+                        reverse=reverse,
+                        run_mem_encoder=True,
+                    )
                 )
                 output_dict[storage_key][frame_idx] = current_out
             # Create slices of per-object outputs for subsequent interaction with each
@@ -789,7 +793,7 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
             # )
             # yield frame_idx, obj_ids, video_res_masks
 
-            pred_eiou = iou_pred[:,0] * cls_logits_pred.max(-1)[0].sigmoid()
+            pred_eiou = iou_pred[:, 0] * cls_logits_pred.max(-1)[0].sigmoid()
             yield frame_idx, obj_ids, pred_masks, pred_eiou
 
     def _add_output_per_object(
@@ -995,7 +999,7 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
             track_in_reverse=reverse,
             run_mem_encoder=run_mem_encoder,
             prev_sam_mask_logits=prev_sam_mask_logits,
-            normed_ori_image=inference_state["images"][frame_idx:frame_idx+1],
+            normed_ori_image=inference_state["images"][frame_idx : frame_idx + 1],
         )
 
         # optionally offload the output to CPU memory to save GPU space
@@ -1220,13 +1224,12 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
             for obj_output_dict in inference_state["output_dict_per_obj"].values():
                 obj_output_dict["non_cond_frame_outputs"].pop(t, None)
 
-
     def init_state_train(
         self,
         images,
         video_height,
         video_width,
-        video_path = None,
+        video_path=None,
         offload_video_to_cpu=False,
         offload_state_to_cpu=False,
         async_loading_frames=False,
@@ -1355,16 +1358,18 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
                 pred_masks = current_out["pred_masks"]
             else:
                 storage_key = "non_cond_frame_outputs"
-                current_out, pred_masks, iou_pred, cls_logits_pred = self._run_single_frame_inference(
-                    inference_state=inference_state,
-                    output_dict=output_dict,
-                    frame_idx=frame_idx,
-                    batch_size=batch_size,
-                    is_init_cond_frame=False,
-                    point_inputs=None,
-                    mask_inputs=None,
-                    reverse=reverse,
-                    run_mem_encoder=True,
+                current_out, pred_masks, iou_pred, cls_logits_pred = (
+                    self._run_single_frame_inference(
+                        inference_state=inference_state,
+                        output_dict=output_dict,
+                        frame_idx=frame_idx,
+                        batch_size=batch_size,
+                        is_init_cond_frame=False,
+                        point_inputs=None,
+                        mask_inputs=None,
+                        reverse=reverse,
+                        run_mem_encoder=True,
+                    )
                 )
                 output_dict[storage_key][frame_idx] = current_out
             # Create slices of per-object outputs for subsequent interaction with each
@@ -1382,7 +1387,6 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
             # yield frame_idx, obj_ids, video_res_masks
 
             yield frame_idx, obj_ids, pred_masks, iou_pred, cls_logits_pred
-
 
     def forward(self, batched_inputs):
         """
@@ -1406,13 +1410,17 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
             images.append(frame.to(self.device))
         num_frames = len(images)
         if num_frames == 0:
-            raise RuntimeError(f"no images found in training")
+            raise RuntimeError("no images found in training")
 
         images_list = ImageList.from_tensors(images)
 
         images = torch.stack(images) / 255.0
-        img_mean = torch.tensor(self.img_mean, dtype=torch.float32)[:, None, None].to(images.device)
-        img_std = torch.tensor(self.img_std, dtype=torch.float32)[:, None, None].to(images.device)
+        img_mean = torch.tensor(self.img_mean, dtype=torch.float32)[:, None, None].to(
+            images.device
+        )
+        img_std = torch.tensor(self.img_std, dtype=torch.float32)[:, None, None].to(
+            images.device
+        )
         images -= img_mean
         images /= img_std
         video_height, video_width = images.shape[-2:]
@@ -1425,7 +1433,13 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
         all_pred_mask_logits = []
         all_pred_iou = []
         all_pred_cls_logits = []
-        for out_frame_idx, out_obj_ids, out_mask_logits, iou_pred, cls_logits_pred in self.propagate_in_video_train(train_state,start_frame_idx=0):
+        for (
+            out_frame_idx,
+            out_obj_ids,
+            out_mask_logits,
+            iou_pred,
+            cls_logits_pred,
+        ) in self.propagate_in_video_train(train_state, start_frame_idx=0):
             all_pred_mask_logits.append(out_mask_logits)
             all_pred_iou.append(iou_pred)
             all_pred_cls_logits.append(cls_logits_pred)
@@ -1434,13 +1448,15 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
         all_pred_mask_logits = torch.stack(all_pred_mask_logits)
         all_pred_iou = torch.stack(all_pred_iou)
         all_pred_cls_logits = torch.stack(all_pred_cls_logits)
-        
+
         targets = self.prepare_targets.process(batched_inputs, images_list, self.device)
 
         outputs = dict()
-        outputs['pred_logits'] = all_pred_cls_logits.mean(0)[None,:]
-        outputs['pred_iou'] = all_pred_iou.permute(1,0,2)[None,:]
-        outputs['pred_masks'] = all_pred_mask_logits.squeeze(2).permute(1,0,2,3)[None,:]
+        outputs["pred_logits"] = all_pred_cls_logits.mean(0)[None, :]
+        outputs["pred_iou"] = all_pred_iou.permute(1, 0, 2)[None, :]
+        outputs["pred_masks"] = all_pred_mask_logits.squeeze(2).permute(1, 0, 2, 3)[
+            None, :
+        ]
 
         losses = self.criterion(outputs, targets)
 
