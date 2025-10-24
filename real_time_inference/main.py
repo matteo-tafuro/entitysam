@@ -196,7 +196,7 @@ if __name__ == "__main__":
     break_at_iteration = None  # For faster testing
 
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        for frame_idx in tqdm(
+        for decoded_frame_idx in tqdm(
             range(0, frame_count, frame_stride),
             total=(
                 break_at_iteration
@@ -207,7 +207,7 @@ if __name__ == "__main__":
             if break_at_iteration and (total_frames == break_at_iteration):
                 break
 
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, decoded_frame_idx)
             ret, frame = cap.read()
             if not ret:
                 break
@@ -254,7 +254,7 @@ if __name__ == "__main__":
                 # Build and panoptic images and annotations
                 panoptic_img_with_filename, frame_segments_annotations = (
                     build_panoptic_frame_and_annotations(
-                        frame_idx=out_frame_idx,
+                        frame_idx=decoded_frame_idx,
                         panoptic_outputs=result_i,
                         categories_by_id=categories_dict,
                         visualization=args.visualization_type,
@@ -262,7 +262,7 @@ if __name__ == "__main__":
                     )
                 )
                 panoptic_images.append(panoptic_img_with_filename)
-                segments_annotations[frame_idx] = frame_segments_annotations
+                segments_annotations[decoded_frame_idx] = frame_segments_annotations
 
                 if args.viz_results:
                     pano_bgr = np.array(panoptic_img_with_filename[0])[
@@ -277,7 +277,7 @@ if __name__ == "__main__":
             total_frames += 1
             current_peak_memory = torch.cuda.max_memory_allocated() / 1024**3  # GB
             peak_memory = max(peak_memory, current_peak_memory)
-            print(f"Processed frame {frame_idx}")
+            print(f"Processed frame {decoded_frame_idx}")
             print(
                 f"Current peak memory: {current_peak_memory:.2f} GB, "
                 f"Overall peak memory: {peak_memory:.2f} GB."
