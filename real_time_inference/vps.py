@@ -3,7 +3,7 @@ from typing import Any, Dict, Literal, Optional, Tuple
 import cv2
 import numpy as np
 import torch
-from panopticapi.utils import IdGenerator
+from panopticapi.utils import IdGenerator, rgb2id
 from PIL import Image
 from torch.nn import functional as F
 
@@ -219,7 +219,7 @@ def build_panoptic_frame_and_annotations(
 
         frame_segments.append(
             {
-                "entity_id": entity_id,
+                "entity_id": int(rgb2id(color)),  # Unique entity ID encoded from color
                 "category_id": category_id,
                 "bbox": [x0, y0, w, h],
                 "area": area,
