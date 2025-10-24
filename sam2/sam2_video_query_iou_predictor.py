@@ -1468,17 +1468,3 @@ class SAM2VideoQueryIoUPredictor(SAM2QueryIoUBase):
                 losses.pop(k)
 
         return losses
-
-        return losses
-
-        return losses
-
-        return losses
-
-        return losses
-
-        return losses
-
-        return losses
-
-        return losses
