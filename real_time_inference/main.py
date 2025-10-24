@@ -2,8 +2,8 @@
 
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-
 import argparse
+import json
 import os
 from datetime import datetime
 
@@ -110,6 +110,21 @@ if __name__ == "__main__":
         help="Do not save output video.",
     )
 
+    save_json_group = parser.add_mutually_exclusive_group()
+    save_json_group.add_argument(
+        "--save_json",
+        dest="save_json",
+        action="store_true",
+        help="Save output JSON annotations.",
+    )
+    save_json_group.add_argument(
+        "--no_save_json",
+        dest="save_json",
+        action="store_false",
+        help="Do not save output JSON annotations.",
+    )
+    parser.set_defaults(save_json=False)
+
     parser.add_argument(
         "--output_root_dir",
         type=str,
@@ -135,7 +150,7 @@ if __name__ == "__main__":
         args.output_root_dir,
         video_id,
     )
-    if args.save_images:
+    if args.save_images or args.save_video or args.save_json:
         os.makedirs(output_dir, exist_ok=True)
 
     # Build (fake) categories dict, used later for visualization
@@ -178,18 +193,18 @@ if __name__ == "__main__":
     segments_annotations = {}  # Frame index -> list of segment annotations
     prev_owner_query_map = None  # For temporal consistency
 
-    break_at_iteration = 60  # For faster testing
+    break_at_iteration = None  # For faster testing
 
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         for frame_idx in tqdm(
-            range(700, frame_count, frame_stride),
+            range(0, frame_count, frame_stride),
             total=(
                 break_at_iteration
                 if break_at_iteration
                 else frame_count // frame_stride
             ),
         ):
-            if total_frames == break_at_iteration:
+            if break_at_iteration and (total_frames == break_at_iteration):
                 break
 
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -268,12 +283,22 @@ if __name__ == "__main__":
                 f"Overall peak memory: {peak_memory:.2f} GB."
             )
 
+    # Save results
+    if args.save_json:
+        annotations_output_path = os.path.join(
+            output_dir, f"{video_id}_panoptic_annotations.json"
+        )
+        with open(annotations_output_path, "w") as f:
+            json.dump(segments_annotations, f, indent=2)
+        print(f"Saved panoptic annotations to {annotations_output_path}")
+
     if args.save_images:
         save_generated_images(
             panoptic_images,
             output_dir=output_dir,
             subdir="panoptic_images",
         )
+        print(f"Saved panoptic images to {output_dir}/panoptic_images")
 
     if args.save_video:
         save_video(
@@ -282,6 +307,8 @@ if __name__ == "__main__":
             output_dir=output_dir,
             fps=fps / frame_stride,
         )
+        print(f"Saved panoptic video to {output_dir}/{video_id}_panoptic_video.mp4")
+
     cap.release()
     if args.viz_results:
         cv2.destroyAllWindows()
