@@ -139,12 +139,6 @@ if __name__ == "__main__":
     )
 
     # === Saving options ===
-    parser.add_argument(
-        "--output_fps",
-        type=int,
-        default=30,
-        help="The FPS of the output video"
-    )
     save_images_group = parser.add_mutually_exclusive_group()
     save_images_group.add_argument(
         "--save_images",
@@ -254,6 +248,7 @@ if __name__ == "__main__":
     panoptic_images = []
     segments_annotations = {}  # Frame index -> list of segment annotations
     prev_owner_query_map = None  # For temporal consistency
+    frame_timestamps = [] # To compute output fps
 
     stop_processing = False
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
@@ -315,6 +310,7 @@ if __name__ == "__main__":
                 )
                 panoptic_images.append(panoptic_img_with_filename)
                 segments_annotations[decoded_frame_idx] = frame_segments_annotations
+                frame_timestamps.append(time.perf_counter())
 
                 if args.viz_results:
                     pano_bgr = np.array(panoptic_img_with_filename[1])[
@@ -356,13 +352,19 @@ if __name__ == "__main__":
         print(f"Saved panoptic images to {output_dir}/panoptic_images")
 
     if args.save_video:
+        if len(frame_timestamps) >= 2:
+            elapsed = frame_timestamps[-1] - frame_timestamps[0]
+            # Use average FPS over the whole run
+            effective_fps = (len(frame_timestamps) - 1) / elapsed
+        else:
+            effective_fps = 30.0
         save_video(
             [panoptic_images[i][1] for i in range(len(panoptic_images))],
             output_name=f"{video_id}_panoptic_video",
             output_dir=output_dir,
-            fps=args.output_fps,
+            fps=effective_fps,
         )
-        print(f"Saved panoptic video to {output_dir}/{video_id}_panoptic_video.mp4")
+        print(f"Saved panoptic video to {output_dir}/{video_id}_panoptic_video.mp4 with {effective_fps} FPS.")
 
     cap.release()
     if args.viz_results:
