@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from datetime import datetime
+from PIL import Image
 
 import cv2
 import numpy as np
@@ -308,16 +309,23 @@ if __name__ == "__main__":
                         orig_bgr_frame=frame,
                     )
                 )
-                panoptic_images.append(panoptic_img_with_filename)
+
+                # Raw frame | Panoptic image side by side
+                pano_bgr = np.array(panoptic_img_with_filename[1])[
+                        :, :, ::-1
+                    ]  # PIL -> BGR
+                side_by_side_bgr = np.hstack((frame, pano_bgr)) # For cv2 viz
+                # Now make it PIL
+                side_by_side_rgb = cv2.cvtColor(side_by_side_bgr, cv2.COLOR_BGR2RGB)
+                side_by_side = Image.fromarray(side_by_side_rgb)
+
+                # Append to loggers
+                panoptic_images.append((panoptic_img_with_filename[0], side_by_side))
                 segments_annotations[decoded_frame_idx] = frame_segments_annotations
                 frame_timestamps.append(time.perf_counter())
 
                 if args.viz_results:
-                    pano_bgr = np.array(panoptic_img_with_filename[1])[
-                        :, :, ::-1
-                    ]  # PIL → BGR
-                    side_by_side = np.hstack((frame, pano_bgr))
-                    cv2.imshow("Panoptic Segmentation", side_by_side)
+                    cv2.imshow("Panoptic Segmentation", side_by_side_bgr)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         stop_processing = True
 
@@ -358,6 +366,7 @@ if __name__ == "__main__":
             effective_fps = (len(frame_timestamps) - 1) / elapsed
         else:
             effective_fps = 30.0
+        
         save_video(
             [panoptic_images[i][1] for i in range(len(panoptic_images))],
             output_name=f"{video_id}_panoptic_video",
