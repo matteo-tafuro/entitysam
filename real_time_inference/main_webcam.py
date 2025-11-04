@@ -23,6 +23,70 @@ from sam2.sam2_camera_query_iou_predictor import SAM2CameraQueryIoUPredictor
 NUM_QUERIES = 50  # That's what the model uses
 NUM_CATEGORIES = 124  # OG code used 124 as in VIPSeg
 
+import threading
+import time
+from collections import deque
+
+class LatestFrameCapture:
+    """
+    Read frames on a background thread and only keep the latest frame.
+    `read_latest()` returns the newest frame and drops anything older.
+    """
+    def __init__(self, src=0):
+        self.cap = cv2.VideoCapture(src)
+
+        # Try to minimize internal buffering when supported by the backend
+        try:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffersize=1)
+        except Exception:
+            pass  # Not all backends support this
+
+        self.queue = deque(maxlen=1)
+        self.lock = threading.Lock()
+        self.stopped = False
+        self._thread = threading.Thread(target=self._reader, daemon=True)
+        self._thread.start()
+
+    def _reader(self):
+        while not self.stopped:
+            ret, frame = self.cap.read()
+            if not ret:
+                # End of stream or camera error
+                self.stop()
+                break
+            with self.lock:
+                # Keep only the newest frame
+                self.queue.append(frame)
+
+    def read_latest(self, wait=True, sleep_secs=0.001):
+        """
+        Returns (ret, frame) like cv2.VideoCapture.read().
+        If wait=True, block briefly until a frame arrives (useful for warm-up).
+        Always returns the latest available frame and clears the buffer.
+        """
+        if wait:
+            # Wait until at least one frame is available or stopped
+            while not self.queue and not self.stopped:
+                time.sleep(sleep_secs)
+        with self.lock:
+            if not self.queue:
+                return False, None
+            frame = self.queue[-1]
+            self.queue.clear()
+        return True, frame
+
+    def stop(self):
+        self.stopped = True
+
+    def release(self):
+        self.stop()
+        try:
+            self._thread.join(timeout=1.0)
+        except RuntimeError:
+            pass
+        self.cap.release()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run the model with a specified checkpoint directory on a specified video."
@@ -64,10 +128,10 @@ if __name__ == "__main__":
         action="store_false",
         help="Do not visualize results on the fly.",
     )
-    parser.set_defaults(viz_results=False)
+    parser.set_defaults(viz_results=True)
 
     parser.add_argument(
-        "--visualization_type",
+        "--viz_type",
         type=str,
         choices=["solid", "overlay"],
         default="overlay",
@@ -78,7 +142,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_fps",
         type=int,
-        default=30
+        default=30,
         help="The FPS of the output video"
     )
     save_images_group = parser.add_mutually_exclusive_group()
@@ -94,6 +158,8 @@ if __name__ == "__main__":
         action="store_false",
         help="Do not save generated images.",
     )
+    parser.set_defaults(save_images=False)
+
     save_video_group = parser.add_mutually_exclusive_group()
     save_video_group.add_argument(
         "--save_video",
@@ -107,6 +173,7 @@ if __name__ == "__main__":
         action="store_false",
         help="Do not save output video.",
     )
+    parser.set_defaults(save_video=False)
 
     save_json_group = parser.add_mutually_exclusive_group()
     save_json_group.add_argument(
@@ -126,10 +193,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_root_dir",
         type=str,
-        default="output_real_time",
+        default="output_real_time_webcam",
         help="Root output directory",
     )
-    parser.set_defaults(save_images=False, save_video=True)
     args = parser.parse_args()
 
     # Log args
@@ -179,7 +245,7 @@ if __name__ == "__main__":
     predictor.reset_state()
 
     # Read video frames as a stream
-    cap = cv2.VideoCapture(0)
+    cap = LatestFrameCapture(0)
 
     decoded_frame_idx = 0
     total_frames = 0
@@ -189,13 +255,11 @@ if __name__ == "__main__":
     segments_annotations = {}  # Frame index -> list of segment annotations
     prev_owner_query_map = None  # For temporal consistency
 
-    break_at_iteration = None  # To stop the stream at some point
+    stop_processing = False
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        while True:
-            if break_at_iteration and (total_frames == break_at_iteration):
-                break
+        while stop_processing is not True:
 
-            ret, frame = cap.read()
+            ret, frame = cap.read_latest(wait=True)
             if not ret:
                 break
 
@@ -245,7 +309,7 @@ if __name__ == "__main__":
                         frame_idx=decoded_frame_idx,
                         panoptic_outputs=result_i,
                         categories_by_id=categories_dict,
-                        visualization=args.visualization_type,
+                        visualization=args.viz_type,
                         orig_bgr_frame=frame,
                     )
                 )
@@ -259,7 +323,7 @@ if __name__ == "__main__":
                     side_by_side = np.hstack((frame, pano_bgr))
                     cv2.imshow("Panoptic Segmentation", side_by_side)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
+                        stop_processing = True
 
             # Update running statistics
             decoded_frame_idx += 1
@@ -271,6 +335,8 @@ if __name__ == "__main__":
                 f"Current peak memory: {current_peak_memory:.2f} GB, "
                 f"Overall peak memory: {peak_memory:.2f} GB."
             )
+
+    cap.release()
 
     # Save results
     if args.save_json:
