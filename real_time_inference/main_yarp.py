@@ -297,6 +297,10 @@ if __name__ == "__main__":
                 f"Overall peak memory: {peak_memory:.2f} GB."
             )
 
+    # yarp cleanup
+    port.close()
+    yarp.Network.fini()
+
     # Save results
     if args.save_json:
         annotations_output_path = os.path.join(
