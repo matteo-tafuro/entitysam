@@ -414,7 +414,7 @@ if __name__ == "__main__":
             # Use average FPS over the whole run
             effective_fps = (len(frame_timestamps) - 1) / elapsed
         else:
-            effective_fps = 1.0
+            effective_fps = 30.0
 
         save_video(
             [side_by_side_images[i][1] for i in range(len(side_by_side_images))],
