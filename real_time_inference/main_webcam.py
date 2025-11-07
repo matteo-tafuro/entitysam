@@ -249,15 +249,16 @@ if __name__ == "__main__":
     panoptic_images = []
     segments_annotations = {}  # Frame index -> list of segment annotations
     prev_owner_query_map = None  # For temporal consistency
-    frame_timestamps = [] # To compute output fps
+    frame_timestamps = []  # To compute output fps
 
     stop_processing = False
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         while stop_processing is not True:
-
             ret, frame = cap.read_latest(wait=True)
             if not ret:
                 break
+
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             width, height = frame.shape[:2][::-1]
             out_size = (height, width)
@@ -265,10 +266,12 @@ if __name__ == "__main__":
 
             # First frame initialization
             if not is_first_frame_initialized:
-                predictor.load_first_frame(frame)
+                predictor.load_first_frame(frame_rgb)
                 is_first_frame_initialized = True
             else:
-                out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(frame)
+                out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(
+                    frame_rgb
+                )
 
                 # pred_masks = torch.cat(pred_masks_list, dim=1)
                 pred_masks = out_mask_logits
@@ -312,9 +315,9 @@ if __name__ == "__main__":
 
                 # Raw frame | Panoptic image side by side
                 pano_bgr = np.array(panoptic_img_with_filename[1])[
-                        :, :, ::-1
-                    ]  # PIL -> BGR
-                side_by_side_bgr = np.hstack((frame, pano_bgr)) # For cv2 viz
+                    :, :, ::-1
+                ]  # PIL -> BGR
+                side_by_side_bgr = np.hstack((frame, pano_bgr))  # For cv2 viz
                 # Now make it PIL
                 side_by_side_rgb = cv2.cvtColor(side_by_side_bgr, cv2.COLOR_BGR2RGB)
                 side_by_side = Image.fromarray(side_by_side_rgb)
@@ -366,14 +369,16 @@ if __name__ == "__main__":
             effective_fps = (len(frame_timestamps) - 1) / elapsed
         else:
             effective_fps = 30.0
-        
+
         save_video(
             [panoptic_images[i][1] for i in range(len(panoptic_images))],
             output_name=f"{video_id}_panoptic_video",
             output_dir=output_dir,
             fps=effective_fps,
         )
-        print(f"Saved panoptic video to {output_dir}/{video_id}_panoptic_video.mp4 with {effective_fps} FPS.")
+        print(
+            f"Saved panoptic video to {output_dir}/{video_id}_panoptic_video.mp4 with {effective_fps} FPS."
+        )
 
     cap.release()
     if args.viz_results:
