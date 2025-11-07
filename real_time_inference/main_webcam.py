@@ -390,6 +390,8 @@ if __name__ == "__main__":
             )
 
     cap.release()
+    if args.viz_results:
+        cv2.destroyAllWindows()
 
     # Save results
     if args.save_json:
