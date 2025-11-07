@@ -211,16 +211,19 @@ if __name__ == "__main__":
             ret, frame = cap.read()
             if not ret:
                 break
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             width, height = frame.shape[:2][::-1]
             out_size = (height, width)
 
             # First frame initialization
             if not is_first_frame_initialized:
-                predictor.load_first_frame(frame)
+                predictor.load_first_frame(frame_rgb)
                 is_first_frame_initialized = True
             else:
-                out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(frame)
+                out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(
+                    frame_rgb
+                )
 
                 # pred_masks = torch.cat(pred_masks_list, dim=1)
                 pred_masks = out_mask_logits
