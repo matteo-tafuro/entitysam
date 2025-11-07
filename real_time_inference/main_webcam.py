@@ -5,13 +5,15 @@
 import argparse
 import json
 import os
+import threading
+import time
+from collections import deque
 from datetime import datetime
-from PIL import Image
 
 import cv2
 import numpy as np
 import torch
-from tqdm import tqdm
+from PIL import Image
 
 from real_time_inference.utils import save_generated_images, save_video
 from real_time_inference.vps import (
@@ -24,15 +26,13 @@ from sam2.sam2_camera_query_iou_predictor import SAM2CameraQueryIoUPredictor
 NUM_QUERIES = 50  # That's what the model uses
 NUM_CATEGORIES = 124  # OG code used 124 as in VIPSeg
 
-import threading
-import time
-from collections import deque
 
 class LatestFrameCapture:
     """
     Read frames on a background thread and only keep the latest frame.
     `read_latest()` returns the newest frame and drops anything older.
     """
+
     def __init__(self, src=0):
         self.cap = cv2.VideoCapture(src)
 
