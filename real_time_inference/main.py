@@ -234,6 +234,7 @@ if __name__ == "__main__":
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             if not ret:
                 break
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             width, height = frame.shape[:2][::-1]
             out_size = (height, width)
