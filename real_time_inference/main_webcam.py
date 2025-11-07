@@ -344,6 +344,8 @@ if __name__ == "__main__":
             )
 
     cap.release()
+    if args.viz_results:
+        cv2.destroyAllWindows()
 
     # Save results
     if args.save_json:
@@ -379,10 +381,6 @@ if __name__ == "__main__":
         print(
             f"Saved panoptic video to {output_dir}/{video_id}_panoptic_video.mp4 with {effective_fps} FPS."
         )
-
-    cap.release()
-    if args.viz_results:
-        cv2.destroyAllWindows()
 
     print(f"Processed {total_frames} frames.")
     print(f"Peak GPU memory usage: {peak_memory:.2f} GB.")
