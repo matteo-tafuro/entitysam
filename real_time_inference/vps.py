@@ -1,4 +1,4 @@
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -13,6 +13,7 @@ def post_process_results_for_vps(
     pred_masks: torch.Tensor,  # [N, 1, H, W]
     out_size: Tuple[int, int],  # (H, W)
     query_to_category_map: Dict[int, int],
+    prev_raw_pred_masks: Optional[List[torch.Tensor]] = None,
     overlap_threshold: float = 0.7,
     mask_binary_threshold: float = 0.5,
     object_mask_threshold: float = 0.05,
@@ -29,6 +30,8 @@ def post_process_results_for_vps(
         out_size: Tuple (height, width) of the output panoptic maps.
         query_to_category_map: Mapping from query index → category ID. Used to assign `category_id` values for
             visualization or downstream panoptic annotations. Any query not found defaults to category 0.
+        prev_raw_pred_masks: Optional list of tensors [N, 1, H, W] containing raw (logit) masks from previous frames.
+            If provided, these are used to compute temporal stability scores for each candidate mask.
         overlap_threshold: Fraction in (0,1]. A candidate is discarded if the fraction of its original mask
             area that remains assigned after competition is less than this threshold.
         mask_binary_threshold: Threshold applied to sigmoid(mask_logits) to compute binary masks and mask
@@ -59,6 +62,16 @@ def post_process_results_for_vps(
         device=frame_scores.device,
     )
 
+    # Estimate stability scores if previous masks are provided
+    if prev_raw_pred_masks is not None and len(prev_raw_pred_masks) > 1:
+        from train.utils.comm import calculate_mask_quality_scores
+
+        mask_quality_scores = calculate_mask_quality_scores(
+            torch.stack(prev_raw_pred_masks, dim=1)
+        ).to(frame_scores.device)  # [N]
+
+        frame_scores = frame_scores + 0.5 * mask_quality_scores
+
     # Keep top-K scoring entities above threshold
     keep = frame_scores >= max(
         object_mask_threshold,
@@ -79,6 +92,7 @@ def post_process_results_for_vps(
     segments_infos = []
     out_ids = []
     current_segment_id = 0
+
     resized_kept_pred_masks = F.interpolate(
         kept_pred_masks, size=(H, W), mode="bilinear"
     )

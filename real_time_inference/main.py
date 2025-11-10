@@ -180,9 +180,11 @@ if __name__ == "__main__":
     peak_memory = 0
     is_first_frame_initialized = False
     panoptic_images = []
+    all_pred_masks = []  # will become [N, T, H, W]
+    MAX_STORED_MASKS = 20  # For temporal stability checks
     segments_annotations = {}  # Frame index -> list of segment annotations
 
-    break_at_iteration = None  # For faster testing
+    break_at_iteration = 5  # For faster testing
 
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         for decoded_frame_idx in tqdm(
@@ -211,12 +213,14 @@ if __name__ == "__main__":
             else:
                 out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(frame)
 
-                # pred_masks = torch.cat(pred_masks_list, dim=1)
-                pred_masks = out_mask_logits
-                # pred_eious = torch.stack(pred_eious)
                 pred_eious = pred_eiou.unsqueeze(0)
+                pred_masks = out_mask_logits
 
-                pred_stability_scores = None
+                # Store pred_mask for temporal stability checks (max 20 frames)
+                if len(all_pred_masks) >= MAX_STORED_MASKS:
+                    all_pred_masks.pop(0)
+                all_pred_masks.append(pred_masks.cpu())
+                print(f"pred_masks.cpu().shape: {pred_masks.cpu().shape}")
 
                 # Post-process the results into panoptic maps
                 result_i = post_process_results_for_vps(
@@ -224,6 +228,7 @@ if __name__ == "__main__":
                     pred_masks=pred_masks,
                     out_size=out_size,
                     query_to_category_map=query_to_category_map,
+                    prev_raw_pred_masks=all_pred_masks,
                 )
 
                 # Keep track of best scoring frames for each entity
