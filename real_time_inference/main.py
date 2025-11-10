@@ -184,7 +184,7 @@ if __name__ == "__main__":
     MAX_STORED_MASKS = 20  # For temporal stability checks
     segments_annotations = {}  # Frame index -> list of segment annotations
 
-    break_at_iteration = 5  # For faster testing
+    break_at_iteration = None  # For faster testing
 
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         for decoded_frame_idx in tqdm(
