@@ -7,6 +7,8 @@ from panopticapi.utils import IdGenerator, rgb2id
 from PIL import Image
 from torch.nn import functional as F
 
+from train.utils.comm import calculate_mask_quality_scores
+
 
 def post_process_results_for_vps(
     pred_ious: torch.Tensor,  # [1, N]
@@ -64,12 +66,10 @@ def post_process_results_for_vps(
 
     # Estimate stability scores if previous masks are provided
     if prev_raw_pred_masks is not None and len(prev_raw_pred_masks) > 1:
-        from train.utils.comm import calculate_mask_quality_scores
-
-        mask_quality_scores = calculate_mask_quality_scores(
-            torch.stack(prev_raw_pred_masks, dim=1)
-        ).to(frame_scores.device)  # [N]
-
+        prev_raw_pred_masks = torch.cat(prev_raw_pred_masks, dim=1)
+        mask_quality_scores = calculate_mask_quality_scores(prev_raw_pred_masks).to(
+            frame_scores.device
+        )  # [N]
         frame_scores = frame_scores + 0.5 * mask_quality_scores
 
     # Keep top-K scoring entities above threshold
