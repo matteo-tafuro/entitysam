@@ -265,7 +265,7 @@ if __name__ == "__main__":
                 segments_annotations[decoded_frame_idx] = frame_segments_annotations
 
                 if args.viz_results:
-                    pano_bgr = np.array(panoptic_img_with_filename[0])[
+                    pano_bgr = np.array(panoptic_img_with_filename[1])[
                         :, :, ::-1
                     ]  # PIL → BGR
                     side_by_side = np.hstack((frame, pano_bgr))
