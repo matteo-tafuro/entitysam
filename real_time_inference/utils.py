@@ -57,7 +57,7 @@ def save_video(
     os.makedirs(output_dir, exist_ok=True)
 
     video_filename = os.path.join(output_dir, f"{output_name}.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc = cv2.VideoWriter_fourcc(*"X264")
 
     first_frame = True
     video_writer = None
@@ -68,7 +68,13 @@ def save_video(
 
         if first_frame:
             height, width, _ = frame.shape
-            video_writer = cv2.VideoWriter(video_filename, fourcc, fps, (width, height))
+            video_writer = cv2.VideoWriter(
+                video_filename,
+                cv2.CAP_FFMPEG,
+                fourcc,
+                fps,
+                (width, height),
+            )
             first_frame = False
 
         video_writer.write(frame)
