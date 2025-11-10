@@ -59,11 +59,13 @@ def post_process_results_for_vps(
         device=frame_scores.device,
     )
 
+    # Keep top-K scoring entities above threshold
     keep = frame_scores >= max(
         object_mask_threshold,
         frame_scores.topk(k=min(len(frame_scores), test_topk_per_image))[0][-1],
     )
 
+    # Filter tensors
     kept_frame_scores = frame_scores[keep]  # [N_keep]
     kept_pred_masks = pred_masks[keep]  # [N_keep, 1, H, W]
     kept_query_ids = query_ids[keep]  # [N_keep]
@@ -94,11 +96,6 @@ def post_process_results_for_vps(
     cur_mask_ids[is_bg] = -1
     del cur_prob_masks, is_bg
 
-    # [H, W] map where each pixel's winning query index is stored (-1 for bg)
-    curr_query_owner_map = torch.full(
-        (H, W), -1, dtype=torch.long, device=resized_kept_pred_masks.device
-    )
-
     for k in range(kept_category_ids.shape[0]):  # N_keep
         cur_masks_k = resized_kept_pred_masks[k].squeeze(0)  # (1, H, W)
 
@@ -116,9 +113,6 @@ def post_process_results_for_vps(
 
             current_segment_id += 1
             panoptic_seg[mask] = current_segment_id
-
-            # Record the owning query index
-            curr_query_owner_map[mask.squeeze(0)] = int(k)
 
             segments_infos.append(
                 {
@@ -269,8 +263,8 @@ def render_panoptic_overlay(
 
     # Sanity checks
     if orig_bgr_frame is None:
-        raise ValueError(panoptic_img_with_filename
-            "orig_bgr_frame must be provided when visualization='overlay'."
+        raise ValueError(
+            "orig_bgr_frame must be provided when visualization='overlay'.",
         )
     if orig_bgr_frame.shape[:2] != (height, width):
         raise ValueError("Original frame and panoptic mask must have matching shapes.")
