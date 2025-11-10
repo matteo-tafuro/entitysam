@@ -10,6 +10,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from tqdm import tqdm
 
 from real_time_inference.utils import save_generated_images, save_video
@@ -254,15 +255,21 @@ if __name__ == "__main__":
                         orig_bgr_frame=frame,
                     )
                 )
-                panoptic_images.append(panoptic_img_with_filename)
                 segments_annotations[decoded_frame_idx] = frame_segments_annotations
 
+                # Raw frame | Panoptic image side by side
+                pano_bgr = np.array(panoptic_img_with_filename[1])[
+                    :, :, ::-1
+                ]  # PIL -> BGR
+                side_by_side_bgr = np.hstack((frame, pano_bgr))  # For cv2 viz
+                # Now make it PIL
+                side_by_side_rgb = cv2.cvtColor(side_by_side_bgr, cv2.COLOR_BGR2RGB)
+                side_by_side = Image.fromarray(side_by_side_rgb)
+
+                panoptic_images.append((panoptic_img_with_filename[0], side_by_side))
+
                 if args.viz_results:
-                    pano_bgr = np.array(panoptic_img_with_filename[1])[
-                        :, :, ::-1
-                    ]  # PIL → BGR
-                    side_by_side = np.hstack((frame, pano_bgr))
-                    cv2.imshow("Panoptic Segmentation", side_by_side)
+                    cv2.imshow("Panoptic Segmentation", side_by_side_bgr)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
 
