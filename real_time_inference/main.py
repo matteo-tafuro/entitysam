@@ -191,7 +191,6 @@ if __name__ == "__main__":
     is_first_frame_initialized = False
     panoptic_images = []
     segments_annotations = {}  # Frame index -> list of segment annotations
-    prev_owner_query_map = None  # For temporal consistency
 
     break_at_iteration = None  # For faster testing
 
@@ -235,11 +234,7 @@ if __name__ == "__main__":
                     pred_masks=pred_masks,
                     out_size=out_size,
                     query_to_category_map=query_to_category_map,
-                    prev_owner_query_map=prev_owner_query_map,
-                    bias_strength=args.temporal_bias_strength,
                 )
-
-                prev_owner_query_map = result_i["owner_query_map"]
 
                 # Keep track of best scoring frames for each entity
                 for entity in result_i["segments_infos"]:

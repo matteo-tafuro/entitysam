@@ -12,19 +12,14 @@ def post_process_results_for_vps(
     pred_ious: torch.Tensor,  # [1, N]
     pred_masks: torch.Tensor,  # [N, 1, H, W]
     out_size: Tuple[int, int],  # (H, W)
-    overlap_threshold: float = 0.25,
-    mask_binary_threshold: float = 0.025,
-    query_to_category_map: Dict[int, int] = {},
-    prev_owner_query_map: Optional[torch.Tensor] = None,
-    bias_strength: float = 0.1,
+    query_to_category_map: Dict[int, int],
+    overlap_threshold: float = 0.7,
+    mask_binary_threshold: float = 0.5,
+    object_mask_threshold: float = 0.05,
+    test_topk_per_image: int = 100,
 ) -> Dict[str, object]:
     """
-    Convert per-frame predictions into a panoptic map, optionally using a temporal prior.
-
-    Temporal prior:
-        If `prev_owner_query_map` is provided, we add `bias_strength` to the logits of
-        query k at pixels where the previous frame's winning query was k. Pixels marked
-        as background (-1) receive no bias (consistent with post-processed filtering).
+    Convert per-frame predictions into a panoptic map.
 
     Args:
         pred_ious: Float tensor with shape [T, N]. T is the number of frames (after removing any
@@ -32,15 +27,16 @@ def post_process_results_for_vps(
         pred_masks: Float tensor with shape [N, T, H, W] containing raw mask logits for each
             candidate/time. These logits are sigmoid-ed and interpolated to `out_size` inside the function.
         out_size: Tuple (height, width) of the output panoptic maps.
+        query_to_category_map: Mapping from query index → category ID. Used to assign `category_id` values for
+            visualization or downstream panoptic annotations. Any query not found defaults to category 0.
         overlap_threshold: Fraction in (0,1]. A candidate is discarded if the fraction of its original mask
             area that remains assigned after competition is less than this threshold.
-        mask_binary_threshold: Threshold (0-1) applied to sigmoid(logits) to compute original mask
-            area and intersections.
-        num_categories: Number of categories used for randomized visualization labels (class-agnostic
-            behavior uses random assignment in this demo/training script).
-        prev_owner_query_map: Optional tensor with shape [H, W] containing the winning query ID
-            at each pixel in the previous frame. IDs are in 0..N-1; background pixels are -1.
-        bias_strength: Amount to add to the logits of the previous frame's winning query at each pixel.
+        mask_binary_threshold: Threshold applied to sigmoid(mask_logits) to compute binary masks and mask
+            intersection areas. Default: 0.5.
+        object_mask_threshold: Minimum absolute score threshold for keeping a candidate. Any candidate whose
+            per-frame score falls below both this value and the dynamic top-K cutoff is removed. Default: 0.05.
+        test_topk_per_image: Maximum number of candidates to retain by score. The function keeps the top-K
+            candidates after thresholding. Default: 100.
 
     Returns:
         A dictionary with the following keys:
@@ -50,15 +46,12 @@ def post_process_results_for_vps(
           - "pred_ids": list[int] of original candidate ids surviving
           - "pred_best_frames": list[int] of best frame indices for each surviving candidate
           - "task": str, fixed to "vps"
-          - "owner_query_map": np.ndarray[int32] of shape (H, W), -1 for bg, else query idx.
     """
 
-    N = pred_masks.shape[0]
     H, W = out_size
 
     # Entity-wise scores for the current frame
     frame_scores = pred_ious.squeeze(0)  # [N]
-
     # Map query ID (1..N) to category ID
     query_ids = torch.arange(frame_scores.size(0), device=frame_scores.device)
     category_ids = torch.tensor(
@@ -66,38 +59,36 @@ def post_process_results_for_vps(
         device=frame_scores.device,
     )
 
+    keep = frame_scores >= max(
+        object_mask_threshold,
+        frame_scores.topk(k=min(len(frame_scores), test_topk_per_image))[0][-1],
+    )
+
+    kept_frame_scores = frame_scores[keep]  # [N_keep]
+    kept_pred_masks = pred_masks[keep]  # [N_keep, 1, H, W]
+    kept_query_ids = query_ids[keep]  # [N_keep]
+    kept_category_ids = category_ids[keep]  # [N_keep]
+
     panoptic_seg = torch.zeros(
         (1, H, W),
         dtype=torch.int32,
-        device=pred_masks.device,
+        device=kept_pred_masks.device,
     )
     segments_infos = []
     out_ids = []
     current_segment_id = 0
-    pred_masks = F.interpolate(pred_masks, size=(H, W), mode="bilinear")
+    resized_kept_pred_masks = F.interpolate(
+        kept_pred_masks, size=(H, W), mode="bilinear"
+    )
 
-    # Temporal bias: add bias to logits where previous frame owned the pixel to encourage temporal consistency
-    if prev_owner_query_map is not None:
-        # Make one-hot of shape (H, W, N). We offset by +1 and drop class 0 (background)
-        prev_owner_one_hot = torch.nn.functional.one_hot(
-            (prev_owner_query_map + 1).clamp_min(0), num_classes=N + 1
-        )[..., 1:]
-
-        # To logits dtype and reshape to (N, 1, H, W)
-        bias_vol = (
-            prev_owner_one_hot.permute(2, 0, 1).unsqueeze(1).to(dtype=pred_masks.dtype)
-        )
-
-        # Scale and add in logit space
-        bias_scalar = torch.tensor(
-            bias_strength, dtype=pred_masks.dtype, device=pred_masks.device
-        )
-        pred_masks = pred_masks + bias_vol * bias_scalar
-        del prev_owner_one_hot, bias_vol
-
-    pred_masks = pred_masks.sigmoid()
-    is_bg = (pred_masks < mask_binary_threshold).sum(0) == len(pred_masks)
-    cur_prob_masks = frame_scores.view(-1, 1, 1, 1).to(pred_masks.device) * pred_masks
+    resized_kept_pred_masks = resized_kept_pred_masks.sigmoid()
+    is_bg = (resized_kept_pred_masks < mask_binary_threshold).sum(0) == len(
+        resized_kept_pred_masks
+    )
+    cur_prob_masks = (
+        kept_frame_scores.view(-1, 1, 1, 1).to(resized_kept_pred_masks.device)
+        * resized_kept_pred_masks
+    )
 
     cur_mask_ids = cur_prob_masks.argmax(0)  # (1, H, W)
     cur_mask_ids[is_bg] = -1
@@ -105,13 +96,13 @@ def post_process_results_for_vps(
 
     # [H, W] map where each pixel's winning query index is stored (-1 for bg)
     curr_query_owner_map = torch.full(
-        (H, W), -1, dtype=torch.long, device=pred_masks.device
+        (H, W), -1, dtype=torch.long, device=resized_kept_pred_masks.device
     )
 
-    for k in range(category_ids.shape[0]):  # N
-        cur_masks_k = pred_masks[k].squeeze(0)  # (1, H, W)
+    for k in range(kept_category_ids.shape[0]):  # N_keep
+        cur_masks_k = resized_kept_pred_masks[k].squeeze(0)  # (1, H, W)
 
-        cat_id = int(category_ids[k])
+        cat_id = int(kept_category_ids[k])
         isthing = True  # class-agnostic entities
 
         mask_area = (cur_mask_ids == k).sum().item()
@@ -134,19 +125,18 @@ def post_process_results_for_vps(
                     "id": current_segment_id,
                     "isthing": bool(isthing),
                     "category_id": cat_id,
-                    "score": frame_scores[k].item(),
+                    "score": kept_frame_scores[k].item(),
                 }
             )
-            out_ids.append(int(query_ids[k]))
+            out_ids.append(int(kept_query_ids[k]))
 
-    del pred_masks
+    del pred_masks, kept_pred_masks, resized_kept_pred_masks
 
     return {
         "image_size": (H, W),
         "pred_masks": panoptic_seg.cpu(),
         "segments_infos": segments_infos,
         "pred_ids": out_ids,
-        "owner_query_map": curr_query_owner_map,
         "task": "vps",
     }
 
@@ -279,7 +269,7 @@ def render_panoptic_overlay(
 
     # Sanity checks
     if orig_bgr_frame is None:
-        raise ValueError(
+        raise ValueError(panoptic_img_with_filename
             "orig_bgr_frame must be provided when visualization='overlay'."
         )
     if orig_bgr_frame.shape[:2] != (height, width):
