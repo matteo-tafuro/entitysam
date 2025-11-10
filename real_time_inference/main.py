@@ -50,14 +50,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mask_decoder_depth", type=int, default=8, help="Mask decoder depth"
     )
-    # float to tune the strength of the temporal bias
-    parser.add_argument(
-        "--temporal_bias_strength",
-        type=float,
-        default=0.0,
-        help="Strength of the temporal bias for query selection",
-    )
-
     # === Visualization options ===
     viz_results_group = parser.add_mutually_exclusive_group()
     viz_results_group.add_argument(
@@ -142,8 +134,6 @@ if __name__ == "__main__":
 
     # Use datetime as video ID
     video_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if args.temporal_bias_strength != 0.0:
-        video_id += f"_{str(args.temporal_bias_strength).replace('.', 'p')}"
 
     # If we need to save results, create output dir
     output_dir = os.path.join(
