@@ -200,6 +200,7 @@ if __name__ == "__main__":
 
             cap.set(cv2.CAP_PROP_POS_FRAMES, decoded_frame_idx)
             ret, frame = cap.read()
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             if not ret:
                 break
 
@@ -208,10 +209,12 @@ if __name__ == "__main__":
 
             # First frame initialization
             if not is_first_frame_initialized:
-                predictor.load_first_frame(frame)
+                predictor.load_first_frame(frame_rgb)
                 is_first_frame_initialized = True
             else:
-                out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(frame)
+                out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(
+                    frame_rgb
+                )
 
                 pred_eious = pred_eiou.unsqueeze(0)
                 pred_masks = out_mask_logits
