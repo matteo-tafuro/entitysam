@@ -25,9 +25,8 @@ def post_process_results_for_vps(
     Convert per-frame predictions into a panoptic map.
 
     Args:
-        pred_ious: Float tensor with shape [T, N]. T is the number of frames (after removing any
-            warmup/padding), N is the number of candidates.
-        pred_masks: Float tensor with shape [N, T, H, W] containing raw mask logits for each
+        pred_ious: Float tensor with shape [1, N].
+        pred_masks: Float tensor with shape [N, 1, H, W] containing raw mask logits for each
             candidate/time. These logits are sigmoid-ed and interpolated to `out_size` inside the function.
         out_size: Tuple (height, width) of the output panoptic maps.
         query_to_category_map: Mapping from query index → category ID. Used to assign `category_id` values for
@@ -46,7 +45,7 @@ def post_process_results_for_vps(
     Returns:
         A dictionary with the following keys:
           - "image_size": Tuple[int,int] (height, width)
-          - "pred_masks": Tensor [T, H, W], A 2D map per frame where each pixel value is an entity ID
+          - "pred_masks": Tensor [1, H, W], A 2D map per frame where each pixel value is an entity ID
           - "segments_infos": list of dicts, one per surviving segment
           - "pred_ids": list[int] of original candidate ids surviving
           - "pred_best_frames": list[int] of best frame indices for each surviving candidate
