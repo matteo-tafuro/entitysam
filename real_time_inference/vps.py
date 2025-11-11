@@ -37,11 +37,11 @@ def post_process_results_for_vps(
         overlap_threshold: Fraction in (0,1]. A candidate is discarded if the fraction of its original mask
             area that remains assigned after competition is less than this threshold.
         mask_binary_threshold: Threshold applied to sigmoid(mask_logits) to compute binary masks and mask
-            intersection areas. Default: 0.5.
+            intersection areas.
         object_mask_threshold: Minimum absolute score threshold for keeping a candidate. Any candidate whose
-            per-frame score falls below both this value and the dynamic top-K cutoff is removed. Default: 0.05.
+            per-frame score falls below both this value and the dynamic top-K cutoff is removed.
         test_topk_per_image: Maximum number of candidates to retain by score. The function keeps the top-K
-            candidates after thresholding. Default: 100.
+            candidates after thresholding.
 
     Returns:
         A dictionary with the following keys:
