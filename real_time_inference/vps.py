@@ -63,14 +63,6 @@ def post_process_results_for_vps(
         device=frame_scores.device,
     )
 
-    # Estimate stability scores if previous masks are provided
-    if prev_raw_pred_masks is not None and len(prev_raw_pred_masks) > 1:
-        prev_raw_pred_masks = torch.cat(prev_raw_pred_masks, dim=1)
-        mask_quality_scores = calculate_mask_quality_scores(prev_raw_pred_masks).to(
-            frame_scores.device
-        )  # [N]
-        frame_scores = frame_scores + 0.5 * mask_quality_scores
-
     # Keep top-K scoring entities above threshold
     keep = frame_scores >= max(
         object_mask_threshold,
@@ -82,6 +74,21 @@ def post_process_results_for_vps(
     kept_pred_masks = pred_masks[keep]  # [N_keep, 1, H, W]
     kept_query_ids = query_ids[keep]  # [N_keep]
     kept_category_ids = category_ids[keep]  # [N_keep]
+
+    # Estimate stability scores if previous masks are provided
+    if prev_raw_pred_masks is not None and len(prev_raw_pred_masks) > 1:
+        prev_raw_pred_masks = torch.cat(prev_raw_pred_masks, dim=1).to(
+            pred_masks.device
+        )  # [N, T_prev, H, W]
+        pred_masks_for_stability = torch.cat(
+            [prev_raw_pred_masks, pred_masks], dim=1
+        )  # [N, T_prev + 1, H, W]
+        mask_quality_scores = calculate_mask_quality_scores(
+            pred_masks_for_stability,
+        )
+        kept_frame_scores = (
+            kept_frame_scores + 0.5 * mask_quality_scores[keep]
+        )  # [N_keep]
 
     panoptic_seg = torch.zeros(
         (1, H, W),
@@ -110,7 +117,7 @@ def post_process_results_for_vps(
     del cur_prob_masks, is_bg
 
     for k in range(kept_category_ids.shape[0]):  # N_keep
-        cur_masks_k = resized_kept_pred_masks[k].squeeze(0)  # (1, H, W)
+        cur_masks_k = resized_kept_pred_masks[k].squeeze(0)  # (T, H, W)
 
         cat_id = int(kept_category_ids[k])
         isthing = True  # class-agnostic entities
@@ -121,12 +128,11 @@ def post_process_results_for_vps(
 
         if mask_area > 0 and original_area > 0 and mask.sum().item() > 0:
             if mask_area / original_area < overlap_threshold:
-                current_segment_id += 1
+                # current_segment_id += 1
                 continue
 
             current_segment_id += 1
             panoptic_seg[mask] = current_segment_id
-
             segments_infos.append(
                 {
                     "id": current_segment_id,
