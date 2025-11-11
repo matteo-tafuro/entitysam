@@ -37,6 +37,14 @@ if __name__ == "__main__":
         help="Path to the input video file.",
     )
 
+    parser.add_argument(
+        "--output_name",
+        type=str,
+        default=None,
+        help="Name of the output directory and video file (without extension). "
+        "If not specified, uses datetime.",
+    )
+
     # === Model-specific arguments ===
     parser.add_argument(
         "--ckpt_dir", type=str, required=True, help="Checkpoint directory name"
@@ -133,8 +141,11 @@ if __name__ == "__main__":
         print(f"  {arg}: {value}")
     print("\n")
 
-    # Use datetime as video ID
-    video_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Use datetime as video ID if output_name not specified
+    if args.output_name is not None:
+        video_id = args.output_name
+    else:
+        video_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # If we need to save results, create output dir
     output_dir = os.path.join(
