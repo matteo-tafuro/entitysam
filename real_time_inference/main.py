@@ -23,13 +23,16 @@ from sam2.sam2_camera_query_iou_predictor import SAM2CameraQueryIoUPredictor
 
 NUM_QUERIES = 50  # That's what the model uses
 NUM_CATEGORIES = 124  # OG code used 124 as in VIPSeg
+MAX_STORED_MASKS = 50  # For temporal stability checks
+BETA = 0.95
+BIAS_CORRECTION = True
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run the model with a specified checkpoint directory on a specified video."
     )
 
-    # === Video input ===
+    # === Video input and output ===
     parser.add_argument(
         "--video_path",
         type=str,
@@ -59,6 +62,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mask_decoder_depth", type=int, default=8, help="Mask decoder depth"
     )
+    parser.add_argument(
+        "--avg_type",
+        type=str,
+        choices=["arithmetic", "ema", "none"],
+        default="ema",
+        help=(
+            "Type of averaging for predicted IoU scores over time. "
+            "'none' means no averaging."
+        ),
+    )
+
     # === Visualization options ===
     viz_results_group = parser.add_mutually_exclusive_group()
     viz_results_group.add_argument(
@@ -193,8 +207,11 @@ if __name__ == "__main__":
     is_first_frame_initialized = False
     panoptic_images = []
     all_pred_masks = []  # will become [N, T, H, W]
-    MAX_STORED_MASKS = 20  # For temporal stability checks
     segments_annotations = {}  # Frame index -> list of segment annotations
+
+    count_t = 0
+    ema_iou = None  # uncorrected EMA state [N]
+    avg_iou = None  # arithmetic running mean state [N]
 
     break_at_iteration = None  # For faster testing
 
@@ -228,10 +245,36 @@ if __name__ == "__main__":
                     frame_rgb
                 )
 
-                pred_eious = pred_eiou.unsqueeze(0)
-                pred_masks = out_mask_logits
+                count_t += 1.0
+                # --- IoU aggregation: EMA or arithmetic ---
+                if args.avg_type == "ema":
+                    if ema_iou is None:
+                        # start from zeros for exact Adam-style correction
+                        ema_iou = torch.zeros_like(pred_eiou)
+                    ema_iou = BETA * ema_iou + (1 - BETA) * pred_eiou
+                    # First few frames are biased towards zero. Correct for that
+                    # with Adam-style bias correction
+                    if BIAS_CORRECTION:
+                        denom = 1.0 - (BETA**count_t)
+                        iou_for_vps = ema_iou / max(denom, 1e-6)
+                    else:
+                        iou_for_vps = ema_iou
+                elif args.avg_type == "arithmetic":
+                    # numerically stable arithmetic running mean (Welford)
+                    if avg_iou is None:
+                        avg_iou = pred_eiou.clone()
+                    else:
+                        avg_iou = avg_iou + (pred_eiou - avg_iou) / count_t
+                    iou_for_vps = avg_iou
+                else:  # args.avg_type == "none"
+                    iou_for_vps = pred_eiou
 
-                # Store pred_mask for temporal stability checks (max 20 frames)
+                pred_eious = iou_for_vps.unsqueeze(
+                    0
+                )  # Now unsqueeze to have batch dim [1, N]
+                pred_masks = out_mask_logits  # [N, 1, H, W]
+
+                # Store pred_mask for temporal stability checks
                 if len(all_pred_masks) >= MAX_STORED_MASKS:
                     all_pred_masks.pop(0)
                 all_pred_masks.append(pred_masks.cpu())
