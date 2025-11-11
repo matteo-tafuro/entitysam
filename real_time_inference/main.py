@@ -224,7 +224,6 @@ if __name__ == "__main__":
                 if len(all_pred_masks) >= MAX_STORED_MASKS:
                     all_pred_masks.pop(0)
                 all_pred_masks.append(pred_masks.cpu())
-                print(f"pred_masks.cpu().shape: {pred_masks.cpu().shape}")
 
                 # Post-process the results into panoptic maps
                 result_i = post_process_results_for_vps(
