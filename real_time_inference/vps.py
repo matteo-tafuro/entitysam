@@ -117,7 +117,7 @@ def post_process_results_for_vps(
     del cur_prob_masks, is_bg
 
     for k in range(kept_category_ids.shape[0]):  # N_keep
-        cur_masks_k = resized_kept_pred_masks[k].squeeze(0)  # (T, H, W)
+        cur_masks_k = resized_kept_pred_masks[k].squeeze(0)  # (1, H, W)
 
         cat_id = int(kept_category_ids[k])
         isthing = True  # class-agnostic entities
@@ -128,7 +128,7 @@ def post_process_results_for_vps(
 
         if mask_area > 0 and original_area > 0 and mask.sum().item() > 0:
             if mask_area / original_area < overlap_threshold:
-                # current_segment_id += 1
+                current_segment_id += 1
                 continue
 
             current_segment_id += 1
