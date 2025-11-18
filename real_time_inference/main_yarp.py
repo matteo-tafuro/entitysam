@@ -27,7 +27,7 @@ NUM_QUERIES = 50  # That's what the model uses
 NUM_CATEGORIES = 124  # OG code used 124 as in VIPSeg
 MAX_STORED_MASKS = 50  # For temporal stability checks
 BETA = 0.95
-BIAS_CORRECTION = True
+BIAS_CORRECTION = True  # Adam-style bias correction for EMA
 YARP_IMAGE_PORT = "/depthCamera/rgbImage:i"
 
 if __name__ == "__main__":

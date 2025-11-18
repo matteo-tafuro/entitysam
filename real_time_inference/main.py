@@ -25,7 +25,7 @@ NUM_QUERIES = 50  # That's what the model uses
 NUM_CATEGORIES = 124  # OG code used 124 as in VIPSeg
 MAX_STORED_MASKS = 50  # For temporal stability checks
 BETA = 0.95
-BIAS_CORRECTION = True
+BIAS_CORRECTION = True  # Adam-style bias correction for EMA
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -210,6 +210,7 @@ if __name__ == "__main__":
     all_pred_masks = []  # will become [N, T, H, W]
     segments_annotations = {}  # Frame index -> list of segment annotations
 
+    # Running statistics for IoU averaging
     count_t = 0
     ema_iou = None  # uncorrected EMA state [N]
     avg_iou = None  # arithmetic running mean state [N]
