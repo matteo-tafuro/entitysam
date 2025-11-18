@@ -374,7 +374,7 @@ if __name__ == "__main__":
             effective_fps = 30.0
 
         save_video(
-            [panoptic_images[i][1] for i in range(len(panoptic_images))],
+            [side_by_side_images[i][1] for i in range(len(side_by_side_images))],
             output_name=f"{video_id}_panoptic_video",
             output_dir=output_dir,
             fps=effective_fps,
