@@ -69,7 +69,7 @@ if __name__ == "__main__":
         "--avg_type",
         type=str,
         choices=["arithmetic", "ema", "none"],
-        default="ema",
+        default="arithmetic",
         help=(
             "Type of averaging for predicted IoU scores over time. "
             "'none' means no averaging."
