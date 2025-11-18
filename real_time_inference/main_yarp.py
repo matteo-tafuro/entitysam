@@ -25,11 +25,29 @@ from sam2.sam2_camera_query_iou_predictor import SAM2CameraQueryIoUPredictor
 
 NUM_QUERIES = 50  # That's what the model uses
 NUM_CATEGORIES = 124  # OG code used 124 as in VIPSeg
-
+MAX_STORED_MASKS = 50  # For temporal stability checks
+BETA = 0.95
+BIAS_CORRECTION = True
+YARP_IMAGE_PORT = "/depthCamera/rgbImage:i"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run the model with a specified checkpoint directory on a specified video."
+    )
+
+    parser.add_argument(
+        "--output_name",
+        type=str,
+        default=None,
+        help="Name of the output directory and video file (without extension). "
+        "If not specified, uses datetime.",
+    )
+
+    parser.add_argument(
+        "--output_root_dir",
+        type=str,
+        default="output_real_time_webcam",
+        help="Root output directory",
     )
 
     # === Model-specific arguments ===
@@ -46,12 +64,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mask_decoder_depth", type=int, default=8, help="Mask decoder depth"
     )  # 8 for ViT-L. 4 for ViT-S
-    # float to tune the strength of the temporal bias
+
     parser.add_argument(
-        "--temporal_bias_strength",
-        type=float,
-        default=0.0,
-        help="Strength of the temporal bias for query selection",
+        "--avg_type",
+        type=str,
+        choices=["arithmetic", "ema", "none"],
+        default="ema",
+        help=(
+            "Type of averaging for predicted IoU scores over time. "
+            "'none' means no averaging."
+        ),
     )
 
     # === Visualization options ===
@@ -124,12 +146,6 @@ if __name__ == "__main__":
     )
     parser.set_defaults(save_json=False)
 
-    parser.add_argument(
-        "--output_root_dir",
-        type=str,
-        default="output_real_time_webcam",
-        help="Root output directory",
-    )
     args = parser.parse_args()
 
     # Log args
@@ -138,10 +154,11 @@ if __name__ == "__main__":
         print(f"  {arg}: {value}")
     print("\n")
 
-    # Use datetime as video ID
-    video_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if args.temporal_bias_strength != 0.0:
-        video_id += f"_{str(args.temporal_bias_strength).replace('.', 'p')}"
+    # Use datetime as video ID if output_name not specified
+    if args.output_name is not None:
+        video_id = args.output_name
+    else:
+        video_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # If we need to save results, create output dir
     output_dir = os.path.join(
@@ -182,21 +199,27 @@ if __name__ == "__main__":
     yarp.Network.init()
 
     port = yarp.BufferedPortImageRgb()
-    port.open("/segmentation/image:i")  # Open a port
+    print(
+        f"Opening YARP image port at {YARP_IMAGE_PORT}. Connect your image source to it."
+    )
+    port.open(YARP_IMAGE_PORT)
 
-    decoded_frame_idx = 0
-    total_frames = 0
     peak_memory = 0
+    frame_counter = 0
     is_first_frame_initialized = False
     panoptic_images = []
+    side_by_side_images = []
+    all_pred_masks = []  # will become [N, T, H, W]
     segments_annotations = {}  # Frame index -> list of segment annotations
-    prev_owner_query_map = None  # For temporal consistency
     frame_timestamps = []  # To compute output fps
+
+    # Running statistics for IoU averaging
+    ema_iou = None  # uncorrected EMA state [N]
+    avg_iou = None  # arithmetic running mean state [N]
 
     stop_processing = False
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         while stop_processing is not True:
-
             # Image frame from YARP
             img_rgb = port.read(False)
             if img_rgb:
@@ -213,7 +236,6 @@ if __name__ == "__main__":
                 frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
             else:
-                # TODO: do we need to handle this better?
                 continue
 
             print(f"Input shape: {out_size}")
@@ -227,12 +249,38 @@ if __name__ == "__main__":
                     frame_rgb
                 )
 
-                # pred_masks = torch.cat(pred_masks_list, dim=1)
-                pred_masks = out_mask_logits
-                # pred_eious = torch.stack(pred_eious)
-                pred_eious = pred_eiou.unsqueeze(0)
+                # --- IoU aggregation: EMA or arithmetic ---
+                if args.avg_type == "ema":
+                    if ema_iou is None:
+                        # start from zeros for exact Adam-style correction
+                        ema_iou = torch.zeros_like(pred_eiou)
+                    ema_iou = BETA * ema_iou + (1 - BETA) * pred_eiou
+                    # First few frames are biased towards zero. Correct for that
+                    # with Adam-style bias correction
+                    if BIAS_CORRECTION:
+                        denom = 1.0 - (BETA ** (frame_counter + 1))
+                        iou_for_vps = ema_iou / max(denom, 1e-6)
+                    else:
+                        iou_for_vps = ema_iou
+                elif args.avg_type == "arithmetic":
+                    # numerically stable arithmetic running mean (Welford)
+                    if avg_iou is None:
+                        avg_iou = pred_eiou.clone()
+                    else:
+                        avg_iou = avg_iou + (pred_eiou - avg_iou) / (frame_counter + 1)
+                    iou_for_vps = avg_iou
+                else:  # args.avg_type == "none"
+                    iou_for_vps = pred_eiou
 
-                pred_stability_scores = None
+                pred_eious = iou_for_vps.unsqueeze(
+                    0
+                )  # Now unsqueeze to have batch dim [1, N]
+                pred_masks = out_mask_logits  # [N, 1, H, W]
+
+                # Store pred_mask for temporal stability checks
+                if len(all_pred_masks) >= MAX_STORED_MASKS:
+                    all_pred_masks.pop(0)
+                all_pred_masks.append(pred_masks.cpu())
 
                 # Post-process the results into panoptic maps
                 result_i = post_process_results_for_vps(
@@ -240,11 +288,8 @@ if __name__ == "__main__":
                     pred_masks=pred_masks,
                     out_size=out_size,
                     query_to_category_map=query_to_category_map,
-                    prev_owner_query_map=prev_owner_query_map,
-                    bias_strength=args.temporal_bias_strength,
+                    prev_raw_pred_masks=all_pred_masks,
                 )
-
-                prev_owner_query_map = result_i["owner_query_map"]
 
                 # Keep track of best scoring frames for each entity
                 for entity in result_i["segments_infos"]:
@@ -259,13 +304,14 @@ if __name__ == "__main__":
                 # Build and panoptic images and annotations
                 panoptic_img_with_filename, frame_segments_annotations = (
                     build_panoptic_frame_and_annotations(
-                        frame_idx=decoded_frame_idx,
+                        frame_idx=frame_counter,
                         panoptic_outputs=result_i,
                         categories_by_id=categories_dict,
                         visualization=args.viz_type,
                         orig_bgr_frame=frame_bgr,
                     )
                 )
+                segments_annotations[frame_counter] = frame_segments_annotations
 
                 # Raw frame | Panoptic image side by side
                 pano_bgr = np.array(panoptic_img_with_filename[1])[
@@ -277,8 +323,10 @@ if __name__ == "__main__":
                 side_by_side = Image.fromarray(side_by_side_rgb)
 
                 # Append to loggers
-                panoptic_images.append((panoptic_img_with_filename[0], side_by_side))
-                segments_annotations[decoded_frame_idx] = frame_segments_annotations
+                panoptic_images.append(panoptic_img_with_filename)
+                side_by_side_images.append(
+                    (panoptic_img_with_filename[0], side_by_side)
+                )
                 frame_timestamps.append(time.perf_counter())
 
                 if args.viz_results:
@@ -287,11 +335,10 @@ if __name__ == "__main__":
                         stop_processing = True
 
             # Update running statistics
-            decoded_frame_idx += 1
-            total_frames += 1
+            frame_counter += 1
             current_peak_memory = torch.cuda.max_memory_allocated() / 1024**3  # GB
             peak_memory = max(peak_memory, current_peak_memory)
-            print(f"Processed frame {decoded_frame_idx}")
+            print(f"Processed frame {frame_counter}")
             print(
                 f"Current peak memory: {current_peak_memory:.2f} GB, "
                 f"Overall peak memory: {peak_memory:.2f} GB."
@@ -339,5 +386,5 @@ if __name__ == "__main__":
     if args.viz_results:
         cv2.destroyAllWindows()
 
-    print(f"Processed {total_frames} frames.")
+    print(f"Processed {frame_counter} frames.")
     print(f"Peak GPU memory usage: {peak_memory:.2f} GB.")
