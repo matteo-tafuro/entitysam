@@ -241,96 +241,90 @@ if __name__ == "__main__":
 
             # First frame initialization
             if not is_first_frame_initialized:
-                predictor.load_first_frame(frame_rgb)
+                predictor.load_first_frame(frame_rgb, padding_frames=3)
                 is_first_frame_initialized = True
-            else:
-                out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(
-                    frame_rgb
+
+            out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(frame_rgb)
+
+            count_t += 1.0
+            # --- IoU aggregation: EMA or arithmetic ---
+            if args.avg_type == "ema":
+                if ema_iou is None:
+                    # start from zeros for exact Adam-style correction
+                    ema_iou = torch.zeros_like(pred_eiou)
+                ema_iou = BETA * ema_iou + (1 - BETA) * pred_eiou
+                # First few frames are biased towards zero. Correct for that
+                # with Adam-style bias correction
+                if BIAS_CORRECTION:
+                    denom = 1.0 - (BETA**count_t)
+                    iou_for_vps = ema_iou / max(denom, 1e-6)
+                else:
+                    iou_for_vps = ema_iou
+            elif args.avg_type == "arithmetic":
+                # numerically stable arithmetic running mean (Welford)
+                if avg_iou is None:
+                    avg_iou = pred_eiou.clone()
+                else:
+                    avg_iou = avg_iou + (pred_eiou - avg_iou) / count_t
+                iou_for_vps = avg_iou
+            else:  # args.avg_type == "none"
+                iou_for_vps = pred_eiou
+
+            pred_eious = iou_for_vps.unsqueeze(
+                0
+            )  # Now unsqueeze to have batch dim [1, N]
+            pred_masks = out_mask_logits  # [N, 1, H, W]
+
+            # Store pred_mask for temporal stability checks
+            if len(all_pred_masks) >= MAX_STORED_MASKS:
+                all_pred_masks.pop(0)
+            all_pred_masks.append(pred_masks.cpu())
+
+            # Post-process the results into panoptic maps
+            result_i = post_process_results_for_vps(
+                pred_ious=pred_eious,
+                pred_masks=pred_masks,
+                out_size=out_size,
+                query_to_category_map=query_to_category_map,
+                prev_raw_pred_masks=all_pred_masks,
+            )
+
+            # Keep track of best scoring frames for each entity
+            for entity in result_i["segments_infos"]:
+                query_id = entity["id"]
+                score = entity["score"]
+                if score > best_entity_scores[query_id]["score"]:
+                    best_entity_scores[query_id] = {
+                        "score": score,
+                        "frame_idx": out_frame_idx,
+                    }
+
+            # Build and panoptic images and annotations
+            panoptic_img_with_filename, frame_segments_annotations = (
+                build_panoptic_frame_and_annotations(
+                    frame_idx=decoded_frame_idx,
+                    panoptic_outputs=result_i,
+                    categories_by_id=categories_dict,
+                    visualization=args.visualization_type,
+                    orig_bgr_frame=frame,
                 )
+            )
+            segments_annotations[decoded_frame_idx] = frame_segments_annotations
 
-                count_t += 1.0
-                # --- IoU aggregation: EMA or arithmetic ---
-                if args.avg_type == "ema":
-                    if ema_iou is None:
-                        # start from zeros for exact Adam-style correction
-                        ema_iou = torch.zeros_like(pred_eiou)
-                    ema_iou = BETA * ema_iou + (1 - BETA) * pred_eiou
-                    # First few frames are biased towards zero. Correct for that
-                    # with Adam-style bias correction
-                    if BIAS_CORRECTION:
-                        denom = 1.0 - (BETA**count_t)
-                        iou_for_vps = ema_iou / max(denom, 1e-6)
-                    else:
-                        iou_for_vps = ema_iou
-                elif args.avg_type == "arithmetic":
-                    # numerically stable arithmetic running mean (Welford)
-                    if avg_iou is None:
-                        avg_iou = pred_eiou.clone()
-                    else:
-                        avg_iou = avg_iou + (pred_eiou - avg_iou) / count_t
-                    iou_for_vps = avg_iou
-                else:  # args.avg_type == "none"
-                    iou_for_vps = pred_eiou
+            # Raw frame | Panoptic image side by side
+            pano_bgr = np.array(panoptic_img_with_filename[1])[:, :, ::-1]  # PIL -> BGR
+            side_by_side_bgr = np.hstack((frame, pano_bgr))  # For cv2 viz
+            # Now make it PIL
+            side_by_side_rgb = cv2.cvtColor(side_by_side_bgr, cv2.COLOR_BGR2RGB)
+            side_by_side = Image.fromarray(side_by_side_rgb)
 
-                pred_eious = iou_for_vps.unsqueeze(
-                    0
-                )  # Now unsqueeze to have batch dim [1, N]
-                pred_masks = out_mask_logits  # [N, 1, H, W]
+            panoptic_images.append(panoptic_img_with_filename)
+            side_by_side_images.append((panoptic_img_with_filename[0], side_by_side))
 
-                # Store pred_mask for temporal stability checks
-                if len(all_pred_masks) >= MAX_STORED_MASKS:
-                    all_pred_masks.pop(0)
-                all_pred_masks.append(pred_masks.cpu())
-
-                # Post-process the results into panoptic maps
-                result_i = post_process_results_for_vps(
-                    pred_ious=pred_eious,
-                    pred_masks=pred_masks,
-                    out_size=out_size,
-                    query_to_category_map=query_to_category_map,
-                    prev_raw_pred_masks=all_pred_masks,
-                )
-
-                # Keep track of best scoring frames for each entity
-                for entity in result_i["segments_infos"]:
-                    query_id = entity["id"]
-                    score = entity["score"]
-                    if score > best_entity_scores[query_id]["score"]:
-                        best_entity_scores[query_id] = {
-                            "score": score,
-                            "frame_idx": out_frame_idx,
-                        }
-
-                # Build and panoptic images and annotations
-                panoptic_img_with_filename, frame_segments_annotations = (
-                    build_panoptic_frame_and_annotations(
-                        frame_idx=decoded_frame_idx,
-                        panoptic_outputs=result_i,
-                        categories_by_id=categories_dict,
-                        visualization=args.visualization_type,
-                        orig_bgr_frame=frame,
-                    )
-                )
-                segments_annotations[decoded_frame_idx] = frame_segments_annotations
-
-                # Raw frame | Panoptic image side by side
-                pano_bgr = np.array(panoptic_img_with_filename[1])[
-                    :, :, ::-1
-                ]  # PIL -> BGR
-                side_by_side_bgr = np.hstack((frame, pano_bgr))  # For cv2 viz
-                # Now make it PIL
-                side_by_side_rgb = cv2.cvtColor(side_by_side_bgr, cv2.COLOR_BGR2RGB)
-                side_by_side = Image.fromarray(side_by_side_rgb)
-
-                panoptic_images.append(panoptic_img_with_filename)
-                side_by_side_images.append(
-                    (panoptic_img_with_filename[0], side_by_side)
-                )
-
-                if args.viz_results:
-                    cv2.imshow("Panoptic Segmentation", side_by_side_bgr)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
+            if args.viz_results:
+                cv2.imshow("Panoptic Segmentation", side_by_side_bgr)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
 
             # Update running statistics
             total_frames += 1
