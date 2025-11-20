@@ -242,7 +242,7 @@ if __name__ == "__main__":
 
             # First frame initialization
             if not is_first_frame_initialized:
-                predictor.load_first_frame(frame_rgb, padding_frames=3)
+                predictor.load_first_frame(frame_rgb)
                 is_first_frame_initialized = True
 
             out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(frame_rgb)

@@ -285,12 +285,10 @@ if __name__ == "__main__":
 
             # First frame initialization
             if not is_first_frame_initialized:
-                predictor.load_first_frame(frame_rgb, padding_frames=3)
+                predictor.load_first_frame(frame_rgb)
                 is_first_frame_initialized = True
 
-            out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(
-                frame_rgb
-            )
+            out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(frame_rgb)
 
             # --- IoU aggregation: EMA or arithmetic ---
             if args.avg_type == "ema":
@@ -359,9 +357,7 @@ if __name__ == "__main__":
             segments_annotations[frame_counter] = frame_segments_annotations
 
             # Raw frame | Panoptic image side by side
-            pano_bgr = np.array(panoptic_img_with_filename[1])[
-                :, :, ::-1
-            ]  # PIL -> BGR
+            pano_bgr = np.array(panoptic_img_with_filename[1])[:, :, ::-1]  # PIL -> BGR
             side_by_side_bgr = np.hstack((frame_bgr, pano_bgr))  # For cv2 viz
             # Now make it PIL
             side_by_side_rgb = cv2.cvtColor(side_by_side_bgr, cv2.COLOR_BGR2RGB)
@@ -369,9 +365,7 @@ if __name__ == "__main__":
 
             # Append to loggers
             panoptic_images.append(panoptic_img_with_filename)
-            side_by_side_images.append(
-                (panoptic_img_with_filename[0], side_by_side)
-            )
+            side_by_side_images.append((panoptic_img_with_filename[0], side_by_side))
             frame_timestamps.append(time.perf_counter())
 
             if args.viz_results:
