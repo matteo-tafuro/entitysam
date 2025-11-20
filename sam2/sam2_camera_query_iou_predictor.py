@@ -75,13 +75,16 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
 
     ###
     @torch.inference_mode()
-    def load_first_frame(self, img):
+    def load_first_frame(self, img, padding_frames=3):
         self.condition_state = self.init_state(
             offload_video_to_cpu=False, offload_state_to_cpu=False
         )
 
         img, width, height = self.prepare_data(img, image_size=self.image_size)
-        self.condition_state["images"] = [img]
+
+        # Add padding frames at the beginning to stabilize the initial features
+        imgs = [img] * padding_frames
+        self.condition_state["images"] = imgs
         self.condition_state["num_frames"] = len(self.condition_state["images"])
         self.condition_state["video_height"] = height
         self.condition_state["video_width"] = width
