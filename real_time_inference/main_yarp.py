@@ -207,6 +207,8 @@ if __name__ == "__main__":
     peak_memory = 0
     frame_counter = 0
     is_first_frame_initialized = False
+    padding_frames = 3  # Number of repeated first frame for warmup
+
     panoptic_images = []
     side_by_side_images = []
     all_pred_masks = []  # will become [N, T, H, W]
@@ -243,6 +245,9 @@ if __name__ == "__main__":
             # First frame initialization
             if not is_first_frame_initialized:
                 predictor.load_first_frame(frame_rgb)
+                print(f"Warming up model with {padding_frames} padding frames...")
+                for _ in range(padding_frames):
+                    predictor.track(frame_rgb)
                 is_first_frame_initialized = True
 
             out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(frame_rgb)
