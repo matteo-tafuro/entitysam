@@ -337,8 +337,6 @@ if __name__ == "__main__":
                 prev_raw_pred_masks=all_pred_masks,
             )
 
-            prev_owner_query_map = result_i["owner_query_map"]
-
             # Keep track of best scoring frames for each entity
             for entity in result_i["segments_infos"]:
                 query_id = entity["id"]
