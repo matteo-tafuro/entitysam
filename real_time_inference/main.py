@@ -25,7 +25,7 @@ NUM_QUERIES = 50  # That's what the model uses
 NUM_CATEGORIES = 124  # OG code used 124 as in VIPSeg
 MAX_STORED_MASKS = 50  # For temporal stability checks
 BETA = 0.95
-BIAS_CORRECTION = True
+BIAS_CORRECTION = True  # Adam-style bias correction for EMA
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -66,7 +66,7 @@ if __name__ == "__main__":
         "--avg_type",
         type=str,
         choices=["arithmetic", "ema", "none"],
-        default="ema",
+        default="arithmetic",
         help=(
             "Type of averaging for predicted IoU scores over time. "
             "'none' means no averaging."
@@ -206,9 +206,11 @@ if __name__ == "__main__":
     peak_memory = 0
     is_first_frame_initialized = False
     panoptic_images = []
+    side_by_side_images = []
     all_pred_masks = []  # will become [N, T, H, W]
     segments_annotations = {}  # Frame index -> list of segment annotations
 
+    # Running statistics for IoU averaging
     count_t = 0
     ema_iou = None  # uncorrected EMA state [N]
     avg_iou = None  # arithmetic running mean state [N]
@@ -320,7 +322,10 @@ if __name__ == "__main__":
                 side_by_side_rgb = cv2.cvtColor(side_by_side_bgr, cv2.COLOR_BGR2RGB)
                 side_by_side = Image.fromarray(side_by_side_rgb)
 
-                panoptic_images.append((panoptic_img_with_filename[0], side_by_side))
+                panoptic_images.append(panoptic_img_with_filename)
+                side_by_side_images.append(
+                    (panoptic_img_with_filename[0], side_by_side)
+                )
 
                 if args.viz_results:
                     cv2.imshow("Panoptic Segmentation", side_by_side_bgr)
@@ -356,7 +361,7 @@ if __name__ == "__main__":
 
     if args.save_video:
         save_video(
-            [panoptic_images[i][1] for i in range(len(panoptic_images))],
+            [side_by_side_images[i][1] for i in range(len(side_by_side_images))],
             output_name=f"{video_id}_panoptic_video",
             output_dir=output_dir,
             fps=fps / frame_stride,
