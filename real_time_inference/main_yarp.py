@@ -207,6 +207,8 @@ if __name__ == "__main__":
     peak_memory = 0
     frame_counter = 0
     is_first_frame_initialized = False
+    padding_frames = 3  # Number of repeated first frame for warmup
+
     panoptic_images = []
     side_by_side_images = []
     all_pred_masks = []  # will become [N, T, H, W]
@@ -218,33 +220,39 @@ if __name__ == "__main__":
     avg_iou = None  # arithmetic running mean state [N]
 
     stop_processing = False
-    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        while stop_processing is not True:
-            # Image frame from YARP
-            img_rgb = port.read(False)
-            if img_rgb:
-                width = img_rgb.width()
-                height = img_rgb.height()
-                out_size = (height, width)
+    try:
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            while stop_processing is not True:
+                # Image frame from YARP
+                img_rgb = port.read(False)
+                if img_rgb:
+                    width = img_rgb.width()
+                    height = img_rgb.height()
+                    out_size = (height, width)
 
-                char_array_ptr = ctypes.cast(
-                    int(img_rgb.getRawImage()), ctypes.POINTER(ctypes.c_char)
-                )
-                bytes_data = ctypes.string_at(char_array_ptr, img_rgb.getRawImageSize())
-                image_array = np.frombuffer(bytes_data, dtype=np.uint8)
-                frame_rgb = image_array.reshape((height, width, 3))
-                frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                    char_array_ptr = ctypes.cast(
+                        int(img_rgb.getRawImage()), ctypes.POINTER(ctypes.c_char)
+                    )
+                    bytes_data = ctypes.string_at(
+                        char_array_ptr, img_rgb.getRawImageSize()
+                    )
+                    image_array = np.frombuffer(bytes_data, dtype=np.uint8)
+                    frame_rgb = image_array.reshape((height, width, 3))
+                    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-            else:
-                continue
+                else:
+                    continue
 
-            print(f"Input shape: {out_size}")
+                print(f"Input shape: {out_size}")
 
-            # First frame initialization
-            if not is_first_frame_initialized:
-                predictor.load_first_frame(frame_rgb)
-                is_first_frame_initialized = True
-            else:
+                # First frame initialization
+                if not is_first_frame_initialized:
+                    predictor.load_first_frame(frame_rgb)
+                    print(f"Warming up model with {padding_frames} padding frames...")
+                    for _ in range(padding_frames):
+                        predictor.track(frame_rgb)
+                    is_first_frame_initialized = True
+
                 out_frame_idx, _, out_mask_logits, pred_eiou = predictor.track(
                     frame_rgb
                 )
@@ -334,57 +342,60 @@ if __name__ == "__main__":
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         stop_processing = True
 
-            # Update running statistics
-            frame_counter += 1
-            current_peak_memory = torch.cuda.max_memory_allocated() / 1024**3  # GB
-            peak_memory = max(peak_memory, current_peak_memory)
-            print(f"Processed frame {frame_counter}")
+                # Update running statistics
+                frame_counter += 1
+                current_peak_memory = torch.cuda.max_memory_allocated() / 1024**3  # GB
+                peak_memory = max(peak_memory, current_peak_memory)
+                print(f"Processed frame {frame_counter}")
+                print(
+                    f"Current peak memory: {current_peak_memory:.2f} GB, "
+                    f"Overall peak memory: {peak_memory:.2f} GB."
+                )
+    except KeyboardInterrupt:
+        print("\nKeyboardInterrupt received, stopping processing gracefully...")
+
+    finally:
+        # yarp cleanup
+        port.close()
+        yarp.Network.fini()
+
+        # Save results
+        if args.save_json:
+            annotations_output_path = os.path.join(
+                output_dir, f"{video_id}_panoptic_annotations.json"
+            )
+            with open(annotations_output_path, "w") as f:
+                json.dump(segments_annotations, f, indent=2)
+            print(f"Saved panoptic annotations to {annotations_output_path}")
+
+        if args.save_images:
+            save_generated_images(
+                panoptic_images,
+                output_dir=output_dir,
+                subdir="panoptic_images",
+            )
+            print(f"Saved panoptic images to {output_dir}/panoptic_images")
+
+        if args.save_video:
+            if len(frame_timestamps) >= 2:
+                elapsed = frame_timestamps[-1] - frame_timestamps[0]
+                # Use average FPS over the whole run
+                effective_fps = (len(frame_timestamps) - 1) / elapsed
+            else:
+                effective_fps = 30.0
+
+            save_video(
+                [side_by_side_images[i][1] for i in range(len(side_by_side_images))],
+                output_name=f"{video_id}_panoptic_video",
+                output_dir=output_dir,
+                fps=effective_fps,
+            )
             print(
-                f"Current peak memory: {current_peak_memory:.2f} GB, "
-                f"Overall peak memory: {peak_memory:.2f} GB."
+                f"Saved panoptic video to {output_dir}/{video_id}_panoptic_video.mp4 with {effective_fps} FPS."
             )
 
-    # yarp cleanup
-    port.close()
-    yarp.Network.fini()
+        if args.viz_results:
+            cv2.destroyAllWindows()
 
-    # Save results
-    if args.save_json:
-        annotations_output_path = os.path.join(
-            output_dir, f"{video_id}_panoptic_annotations.json"
-        )
-        with open(annotations_output_path, "w") as f:
-            json.dump(segments_annotations, f, indent=2)
-        print(f"Saved panoptic annotations to {annotations_output_path}")
-
-    if args.save_images:
-        save_generated_images(
-            panoptic_images,
-            output_dir=output_dir,
-            subdir="panoptic_images",
-        )
-        print(f"Saved panoptic images to {output_dir}/panoptic_images")
-
-    if args.save_video:
-        if len(frame_timestamps) >= 2:
-            elapsed = frame_timestamps[-1] - frame_timestamps[0]
-            # Use average FPS over the whole run
-            effective_fps = (len(frame_timestamps) - 1) / elapsed
-        else:
-            effective_fps = 30.0
-
-        save_video(
-            [side_by_side_images[i][1] for i in range(len(side_by_side_images))],
-            output_name=f"{video_id}_panoptic_video",
-            output_dir=output_dir,
-            fps=effective_fps,
-        )
-        print(
-            f"Saved panoptic video to {output_dir}/{video_id}_panoptic_video.mp4 with {effective_fps} FPS."
-        )
-
-    if args.viz_results:
-        cv2.destroyAllWindows()
-
-    print(f"Processed {frame_counter} frames.")
-    print(f"Peak GPU memory usage: {peak_memory:.2f} GB.")
+        print(f"Processed {frame_counter} frames.")
+        print(f"Peak GPU memory usage: {peak_memory:.2f} GB.")

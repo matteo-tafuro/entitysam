@@ -97,7 +97,6 @@ def post_process_results_for_vps(
     )
     segments_infos = []
     out_ids = []
-    current_segment_id = 0
 
     resized_kept_pred_masks = F.interpolate(
         kept_pred_masks, size=(H, W), mode="bilinear"
@@ -116,7 +115,7 @@ def post_process_results_for_vps(
     cur_mask_ids[is_bg] = -1
     del cur_prob_masks, is_bg
 
-    for k in range(kept_category_ids.shape[0]):  # N_keep
+    for k, query_id in enumerate(kept_query_ids):  # N_keep
         cur_masks_k = resized_kept_pred_masks[k].squeeze(0)  # (1, H, W)
 
         cat_id = int(kept_category_ids[k])
@@ -128,10 +127,9 @@ def post_process_results_for_vps(
 
         if mask_area > 0 and original_area > 0 and mask.sum().item() > 0:
             if mask_area / original_area < overlap_threshold:
-                current_segment_id += 1
                 continue
 
-            current_segment_id += 1
+            current_segment_id = query_id.item()
             panoptic_seg[mask] = current_segment_id
             segments_infos.append(
                 {
@@ -141,7 +139,7 @@ def post_process_results_for_vps(
                     "score": kept_frame_scores[k].item(),
                 }
             )
-            out_ids.append(int(kept_query_ids[k]))
+            out_ids.append(current_segment_id)
 
     del pred_masks, kept_pred_masks, resized_kept_pred_masks
 

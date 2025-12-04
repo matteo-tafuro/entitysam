@@ -81,6 +81,7 @@ class SAM2CameraQueryIoUPredictor(SAM2QueryIoUBase):
         )
 
         img, width, height = self.prepare_data(img, image_size=self.image_size)
+
         self.condition_state["images"] = [img]
         self.condition_state["num_frames"] = len(self.condition_state["images"])
         self.condition_state["video_height"] = height
